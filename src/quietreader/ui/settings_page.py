@@ -721,13 +721,18 @@ class SettingsPage(QWidget):
 
         card, rows = self._make_card(page)
         rows.addWidget(self._tr_label("GitHub", "settingsRowTitle"))
+        rows.addSpacing(6)
+        links = QHBoxLayout()
+        links.setSpacing(8)
         for label, url in (
             ("项目主页", PROJECT_URL),
             ("反馈问题", f"{PROJECT_URL}/issues"),
             ("发布记录", RELEASES_URL),
         ):
             button = self._tr_button(label, lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link)), "settingsBtn")
-            rows.addWidget(button, alignment=Qt.AlignmentFlag.AlignLeft)
+            links.addWidget(button)
+        links.addStretch(1)
+        rows.addLayout(links)
         layout.addWidget(card)
         layout.addStretch(1)
 
