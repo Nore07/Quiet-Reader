@@ -53,7 +53,13 @@ EN = {
     "专注模式下按住此键，拖动窗口内可移动、拖动边缘可缩放": "Hold in Focus mode to drag anywhere to move or drag edges to resize",
     "让阅读窗口保持在桌面其他窗口之上": "Keep the reader window above other desktop windows",
     "点击关闭按钮时最小化至系统托盘，而非退出程序": "Minimize to the system tray on close instead of quitting",
-    "窗口隐藏或失去焦点时也可通过全局快捷键显示 / 隐藏或紧急退出": "Allow show/hide and emergency exit shortcuts even when unfocused",
+    (
+        "开启后，窗口显示时，即使正在使用其他应用，也能使用「显示 / 隐藏」和「紧急退出」快捷键。"
+        "窗口隐藏或最小化后，只有「显示 / 隐藏」快捷键仍然生效，可用它唤回窗口。"
+    ): (
+        "When enabled, Show / Hide and Emergency Exit work while the window is visible, even if another app is active. "
+        "When the window is hidden or minimized, only Show / Hide remains active so you can bring the window back."
+    ),
     "配置文件": "State file",
     "运行模式": "Storage mode",
     "只读保护模式（数据来自不支持的版本）": "Read-only protection (unsupported state version)",
@@ -71,7 +77,9 @@ EN = {
     "启用全局显示 / 隐藏和紧急退出快捷键": "Enable global show / hide and emergency exit shortcuts",
     "显示 / 隐藏快捷键": "Show / hide shortcut", "紧急退出快捷键": "Emergency exit shortcut",
     "显示 / 隐藏：{message}": "Show / hide: {message}", "紧急退出：{message}": "Emergency exit: {message}",
-    "同一按键切换隐藏和显示。启用全局快捷键后，窗口隐藏或失去焦点时也可使用。\n紧急退出直接关闭程序，不隐藏到托盘，也不等待后台导入；会尝试保存当前位置。": "The same key toggles hide and show. Enable global shortcuts to use them while hidden or unfocused.\nEmergency exit closes the process, bypassing the tray and import workers. It attempts to save your position.",
+    "紧急退出会尝试保存当前位置，随后直接退出，无需等待后台导入完成。": (
+        "Emergency Exit attempts to save your position and then quits without waiting for background imports."
+    ),
     "静读": "QuietReader", "打开": "Open", "添加书籍": "Add books", "配置": "Configuration", "隐藏": "Hide",
     "置顶": "On top", "编码": "Encoding",
     "专注": "Focus", "退出专注": "Exit focus", "进入专注模式": "Enter focus mode", "退出专注模式": "Exit focus mode",

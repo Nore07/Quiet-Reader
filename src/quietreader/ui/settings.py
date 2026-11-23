@@ -15,6 +15,12 @@ from quietreader.ui.key_capture import KeyBindingButton
 from quietreader.ui.theme import colors, stylesheet
 
 
+GLOBAL_HOTKEY_DESCRIPTION = (
+    "开启后，窗口显示时，即使正在使用其他应用，也能使用「显示 / 隐藏」和「紧急退出」快捷键。"
+    "窗口隐藏或最小化后，只有「显示 / 隐藏」快捷键仍然生效，可用它唤回窗口。"
+)
+
+
 class _PreferencesWheelFilter(QObject):
     """Wheel over a closed editor scrolls the page instead of changing a value."""
     def __init__(self, viewport, parent):
@@ -133,7 +139,8 @@ class SettingsDialog(QDialog):
         self.note("PageUp / PageDown 翻页，Ctrl+PageUp / Ctrl+PageDown 切换章节；两组按键都可以修改。")
         self.note("专注模式仅显示正文，F10（可修改）或 Esc 退出，也可从托盘或正文右键菜单退出。")
         self.note("专注模式下按快捷键在 0% 和 100% 背景透明度间切换，默认 F9；按住调整键时，仅当背景为 0% 才临时提高到 1% 以接收鼠标操作，松开后恢复；其他透明度保持不变。")
-        self.note("同一按键切换隐藏和显示。启用全局快捷键后，窗口隐藏或失去焦点时也可使用。\n紧急退出直接关闭程序，不隐藏到托盘，也不等待后台导入；会尝试保存当前位置。")
+        self.note(GLOBAL_HOTKEY_DESCRIPTION)
+        self.note("紧急退出会尝试保存当前位置，随后直接退出，无需等待后台导入完成。")
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.RestoreDefaults)
         for role, source in [(QDialogButtonBox.StandardButton.Save, "保存配置"), (QDialogButtonBox.StandardButton.Cancel, "取消"), (QDialogButtonBox.StandardButton.RestoreDefaults, "恢复默认")]:
             self.texts.append((self.buttons.button(role), source))

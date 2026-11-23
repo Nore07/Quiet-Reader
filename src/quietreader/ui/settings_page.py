@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QBoxLayout, QColorDialog, QFontComboBox, QFrame, QGridLayout,
@@ -18,8 +18,8 @@ from quietreader.ui.appearance_popover import _SliderControl, _ThemeCard
 from quietreader.ui.controls import QuietComboBox, SegmentedControl, ThinSlider, ToggleSwitch
 from quietreader.ui.icons import render_icon_pixmap
 from quietreader.ui.key_capture import KeyBindingButton
-from quietreader.ui.settings import _PreferencesWheelFilter
-from quietreader.ui.tokens import NARROW_BREAKPOINT, resolve_palette
+from quietreader.ui.settings import GLOBAL_HOTKEY_DESCRIPTION, _PreferencesWheelFilter
+from quietreader.ui.tokens import resolve_palette
 
 
 _SECTION_SPECS = (
@@ -29,6 +29,9 @@ _SECTION_SPECS = (
     ("shortcuts", "keyboard", "快捷键", "点击按键即可重新录入；Esc、Ctrl+O、Ctrl+, 与 Ctrl+C 为系统保留键。"),
     ("storage", "storage", "数据与存储", "所有书籍、阅读进度与配置均仅保存在本地数据目录，完全离线。"),
 )
+_SETTINGS_RAIL_MIN_WIDTH = 720
+_CARD_HORIZONTAL_PADDING = 16
+_MIN_ROW_TEXT_WIDTH = 160
 
 
 class _SettingsNavButton(QAbstractButton):
@@ -188,6 +191,7 @@ class SettingsPage(QWidget):
         self._translatable_labels: list[tuple[QLabel, str]] = []
         self._translatable_buttons: list[tuple[QPushButton, str]] = []
         self._themed_widgets: list[object] = []
+        self.toggles: dict[str, ToggleSwitch] = {}
 
         # Exposed attribute for DesktopColorPicker / ColorOverlay language discovery
         self.language = "system"
@@ -235,7 +239,7 @@ class SettingsPage(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        # Narrow-window section picker (replaces left rail < 560px)
+        # Narrow-window section picker replaces the left rail.
         self.narrow_section_combo = QuietComboBox(right)
         self.narrow_section_combo.setObjectName("shelfSortCombo")
         for key, _icon, label_src, _desc in _SECTION_SPECS:
@@ -259,6 +263,8 @@ class SettingsPage(QWidget):
         host_layout.setSpacing(0)
 
         self.section_stack = QStackedWidget(self.scroll_host)
+        # Inactive sections must not force the scroll area's content wider than its viewport.
+        self.section_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.section_pages: dict[str, QWidget] = {}
         self._build_appearance_section()
         self._build_reading_section()
@@ -267,6 +273,7 @@ class SettingsPage(QWidget):
         self._build_storage_section()
         host_layout.addWidget(self.section_stack, 1)
         self.scroll.setWidget(self.scroll_host)
+        self.scroll.viewport().installEventFilter(self)
         right_layout.addWidget(self.scroll, 1)
 
         # Footer bar
@@ -347,7 +354,7 @@ class SettingsPage(QWidget):
         card.setObjectName("settingsCard")
         card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 4, 16, 4)
+        layout.setContentsMargins(_CARD_HORIZONTAL_PADDING, 4, _CARD_HORIZONTAL_PADDING, 4)
         layout.setSpacing(0)
         return card, layout
 
@@ -365,11 +372,13 @@ class SettingsPage(QWidget):
         control: QWidget,
         responsive: bool = False,
         add_divider_before: bool = False,
+        stacked: bool = False,
     ):
         if add_divider_before:
             self._add_card_divider(card_layout)
         row_host = QWidget()
-        row_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, row_host)
+        direction = QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+        row_layout = QBoxLayout(direction, row_host)
         row_layout.setContentsMargins(0, 12, 0, 12)
         row_layout.setSpacing(14)
 
@@ -487,6 +496,7 @@ class SettingsPage(QWidget):
         bg_outer = QBoxLayout(QBoxLayout.Direction.LeftToRight, bg_controls)
         bg_outer.setContentsMargins(0, 0, 0, 0)
         bg_outer.setSpacing(6)
+        bg_outer.setAlignment(Qt.AlignmentFlag.AlignLeft)
         bg_pair1 = QHBoxLayout()
         bg_pair1.setContentsMargins(0, 0, 0, 0)
         bg_pair1.setSpacing(6)
@@ -497,7 +507,7 @@ class SettingsPage(QWidget):
         self.bg_choose_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         bg_pair1.addWidget(self.bg_swatch)
         bg_pair1.addWidget(self.bg_choose_btn)
-        bg_pair1.addStretch(1)
+        bg_pair1.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         bg_pair2 = QHBoxLayout()
         bg_pair2.setContentsMargins(0, 0, 0, 0)
@@ -508,7 +518,7 @@ class SettingsPage(QWidget):
         self.bg_reset_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         bg_pair2.addWidget(self.bg_pick_btn)
         bg_pair2.addWidget(self.bg_reset_btn)
-        bg_pair2.addStretch(1)
+        bg_pair2.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         bg_outer.addLayout(bg_pair1)
         bg_outer.addLayout(bg_pair2)
@@ -523,6 +533,7 @@ class SettingsPage(QWidget):
         text_outer = QBoxLayout(QBoxLayout.Direction.LeftToRight, text_controls)
         text_outer.setContentsMargins(0, 0, 0, 0)
         text_outer.setSpacing(6)
+        text_outer.setAlignment(Qt.AlignmentFlag.AlignLeft)
         text_pair1 = QHBoxLayout()
         text_pair1.setContentsMargins(0, 0, 0, 0)
         text_pair1.setSpacing(6)
@@ -530,7 +541,7 @@ class SettingsPage(QWidget):
         self.text_swatch.clicked.connect(self._choose_text_color)
         self._themed_widgets.append(self.text_swatch)
         text_pair1.addWidget(self.text_swatch)
-        text_pair1.addStretch(1)
+        text_pair1.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         text_pair2 = QHBoxLayout()
         text_pair2.setContentsMargins(0, 0, 0, 0)
@@ -541,7 +552,7 @@ class SettingsPage(QWidget):
         self.text_reset_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         text_pair2.addWidget(self.text_choose_btn)
         text_pair2.addWidget(self.text_reset_btn)
-        text_pair2.addStretch(1)
+        text_pair2.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         text_outer.addLayout(text_pair1)
         text_outer.addLayout(text_pair2)
@@ -575,7 +586,7 @@ class SettingsPage(QWidget):
         )
         layout.addWidget(card1)
 
-        # Card 2: Window behavior (adjust key + 3 ToggleSwitches)
+        # Card 2: Window behavior
         card2, c2 = self._make_card(page)
 
         self.adjust_key_control = SegmentedControl(card2)
@@ -588,11 +599,9 @@ class SettingsPage(QWidget):
             self.adjust_key_control, responsive=True,
         )
 
-        self.toggles: dict[str, ToggleSwitch] = {}
         toggle_specs = (
             ("always_on_top", "窗口始终置顶", "让阅读窗口保持在桌面其他窗口之上"),
             ("close_to_tray", "关闭窗口时隐藏至托盘", "点击关闭按钮时最小化至系统托盘，而非退出程序"),
-            ("global_hotkey", "启用全局显示 / 隐藏和紧急退出快捷键", "窗口隐藏或失去焦点时也可通过全局快捷键显示 / 隐藏或紧急退出"),
         )
         for field, title_s, sub_s in toggle_specs:
             sw = ToggleSwitch(False, card2)
@@ -608,6 +617,14 @@ class SettingsPage(QWidget):
     def _build_shortcuts_section(self):
         _, _, title_src, desc_src = _SECTION_SPECS[3]
         page, layout = self._make_section_page("shortcuts", title_src, desc_src)
+
+        card, card_layout = self._make_card(page)
+        toggle = ToggleSwitch(False, card)
+        toggle.toggled.connect(lambda checked: self._on_toggle_changed("global_hotkey", checked))
+        self.toggles["global_hotkey"] = toggle
+        self._themed_widgets.append(toggle)
+        self._add_card_row(card_layout, "启用全局显示 / 隐藏和紧急退出快捷键", GLOBAL_HOTKEY_DESCRIPTION, toggle)
+        layout.addWidget(card)
 
         self.binding_buttons: dict[str, KeyBindingButton] = {}
         groups = (
@@ -650,14 +667,14 @@ class SettingsPage(QWidget):
         self.storage_dir_value.setWordWrap(True)
         self.storage_dir_value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         self.storage_dir_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._add_card_row(c_layout, "当前数据目录", "", self.storage_dir_value, responsive=True)
+        self._add_card_row(c_layout, "当前数据目录", "", self.storage_dir_value, stacked=True)
 
         self.storage_file_value = QLabel("", card)
         self.storage_file_value.setObjectName("settingsMonoValue")
         self.storage_file_value.setWordWrap(True)
         self.storage_file_value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         self.storage_file_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._add_card_row(c_layout, "配置文件", "", self.storage_file_value, responsive=True, add_divider_before=True)
+        self._add_card_row(c_layout, "配置文件", "", self.storage_file_value, stacked=True, add_divider_before=True)
 
         self.storage_books_value = QLabel("", card)
         self.storage_books_value.setObjectName("popoverValue")
@@ -666,7 +683,7 @@ class SettingsPage(QWidget):
         self.storage_mode_value = QLabel("", card)
         self.storage_mode_value.setObjectName("settingsRowSub")
         self.storage_mode_value.setWordWrap(True)
-        self._add_card_row(c_layout, "运行模式", "", self.storage_mode_value, responsive=True, add_divider_before=True)
+        self._add_card_row(c_layout, "运行模式", "", self.storage_mode_value, stacked=True, add_divider_before=True)
 
         layout.addWidget(card)
         layout.addStretch(1)
@@ -752,6 +769,7 @@ class SettingsPage(QWidget):
             btn.refresh()
         self._refresh_color_swatches()
         self._refresh_storage_info()
+        self._update_responsive_rows()
 
     def cancel_active_capture(self):
         self.picker.cancel()
@@ -780,10 +798,13 @@ class SettingsPage(QWidget):
                 focus_adjust_key=defaults.focus_adjust_key,
                 always_on_top=defaults.always_on_top,
                 close_to_tray=defaults.close_to_tray,
-                global_hotkey=defaults.global_hotkey,
             )
         elif sec == "shortcuts":
-            updated = replace(self._settings, **{k: getattr(defaults, k) for k in BINDING_FIELDS})
+            updated = replace(
+                self._settings,
+                global_hotkey=defaults.global_hotkey,
+                **{key: getattr(defaults, key) for key in BINDING_FIELDS},
+            )
         else:
             return
         self._commit(updated)
@@ -793,16 +814,36 @@ class SettingsPage(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        narrow = self.width() < NARROW_BREAKPOINT
+        narrow = self.width() < _SETTINGS_RAIL_MIN_WIDTH
         self.rail.setVisible(not narrow)
         self.narrow_section_combo.setVisible(narrow)
-        direction = QBoxLayout.Direction.TopToBottom if self.width() < 520 else QBoxLayout.Direction.LeftToRight
-        for row in self._responsive_rows:
-            if row.direction() != direction:
-                row.setDirection(direction)
+
+    def eventFilter(self, watched, event):
+        if watched is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
+            self._update_responsive_rows()
+        return super().eventFilter(watched, event)
+
+    def _update_responsive_rows(self):
+        margins = self.scroll_host.layout().contentsMargins()
+        # Keep the breakpoint stable when the vertical scrollbar appears.
+        viewport_width = self.scroll.maximumViewportSize().width() - self.scroll.verticalScrollBar().sizeHint().width()
+        row_width = viewport_width - margins.left() - margins.right() - 2 * _CARD_HORIZONTAL_PADDING
+        horizontal = QBoxLayout.Direction.LeftToRight
+        vertical = QBoxLayout.Direction.TopToBottom
+
         for group in self._responsive_control_groups:
+            item_width = sum(group.itemAt(index).minimumSize().width() for index in range(group.count()))
+            group_width = item_width + group.spacing() * (group.count() - 1)
+            direction = horizontal if group_width <= row_width else vertical
             if group.direction() != direction:
                 group.setDirection(direction)
+
+        for row in self._responsive_rows:
+            control_width = row.itemAt(1).sizeHint().width()
+            required_width = _MIN_ROW_TEXT_WIDTH + row.spacing() + control_width
+            direction = horizontal if required_width <= row_width else vertical
+            if row.direction() != direction:
+                row.setDirection(direction)
 
     # ---- Private slots ----
 
