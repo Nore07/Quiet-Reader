@@ -78,7 +78,6 @@ class ThinSlider(QSlider):
             self._dragging = False
             self.setValue(self._value_for_x(event.position().x()))
             self.setSliderDown(False)
-            self.sliderReleased.emit()
             self.update()
             event.accept()
             return
@@ -371,7 +370,14 @@ class FloatingPopover(QFrame):
             inside_anchor = False
             if self._anchor is not None and self._anchor.isVisible():
                 inside_anchor = self._anchor.rect().contains(self._anchor.mapFromGlobal(global_pos))
-            if not inside_self and not inside_anchor:
+            # A combo box owns a separate popup window that can extend beyond the card.
+            popup = QApplication.activePopupWidget()
+            inside_popup = (
+                popup is not None
+                and self.isAncestorOf(popup.parentWidget())
+                and popup.rect().contains(popup.mapFromGlobal(global_pos))
+            )
+            if not (inside_self or inside_anchor or inside_popup):
                 self.dismiss()
         return False
 

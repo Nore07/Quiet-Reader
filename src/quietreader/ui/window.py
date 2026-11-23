@@ -1601,10 +1601,11 @@ class MainWindow(QMainWindow):
     def _update_sidebar_book_card(self, progress_pct: str = ""):
         if not hasattr(self, "sidebar_book_title"):
             return
+        scale = self.sidebar_cover.devicePixelRatioF()
         if self.book is None:
             title = self.t("一本书，一处安静")
             meta = self.t("本地阅读 · 无需联网")
-            cover = render_cover_pixmap(title, width=36, height=48, radius=5.0, mini=True)
+            cover = render_cover_pixmap(title, width=36, height=48, radius=5.0, scale=scale, mini=True)
         else:
             title = self.book_title.text().strip() or self.book.title
             fmt = "EPUB" if self.book.encoding == "EPUB" else "TXT"
@@ -1612,7 +1613,7 @@ class MainWindow(QMainWindow):
             meta = " · ".join(parts)
             cover = render_cover_pixmap(
                 title, self.book.author, fmt, getattr(self.book, "cover", b""),
-                width=36, height=48, radius=5.0, mini=True,
+                width=36, height=48, radius=5.0, scale=scale, mini=True,
             )
         self.sidebar_cover.setPixmap(cover)
         title_metrics = QFontMetrics(self.sidebar_book_title.font())

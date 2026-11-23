@@ -4,7 +4,7 @@ from functools import lru_cache
 import hashlib
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPixmapCache
 
 _COVER_THEMES = (
     ("#395246", "#23362d", "#eff1e8", "#a9c7ad"),  # deep pine
@@ -35,17 +35,23 @@ def render_cover_pixmap(
     width: int = 148,
     height: int = 196,
     radius: float = 8.0,
-    scale: int = 2,
+    scale: float = 2.0,
     mini: bool = False,
 ) -> QPixmap:
     """Render a crisp HiDPI rounded cover pixmap from EPUB image bytes or typographic fallback."""
+    scale = float(scale)
     if cover_bytes:
+        digest = hashlib.sha256(cover_bytes).hexdigest()
+        cache_key = f"quietreader:cover:{digest}:{width}:{height}:{radius}:{scale}"
+        cached = QPixmapCache.find(cache_key)
+        if cached is not None:
+            return cached
         raw = QPixmap()
         if raw.loadFromData(cover_bytes) and not raw.isNull():
-            pw, ph = width * scale, height * scale
+            pw, ph = round(width * scale), round(height * scale)
             out = QPixmap(pw, ph)
             out.fill(Qt.GlobalColor.transparent)
-            out.setDevicePixelRatio(float(scale))
+            out.setDevicePixelRatio(scale)
             painter = QPainter(out)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -67,6 +73,7 @@ def render_cover_pixmap(
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(QRectF(0.5, 0.5, width - 1.0, height - 1.0), radius, radius)
             painter.end()
+            QPixmapCache.insert(cache_key, out)
             return out
     return _cached_typographic_cover(title or "Untitled", author or "", fmt or "", width, height, radius, scale, mini)
 
@@ -79,13 +86,13 @@ def _cached_typographic_cover(
     width: int,
     height: int,
     radius: float,
-    scale: int,
+    scale: float,
     mini: bool,
 ) -> QPixmap:
-    pw, ph = width * scale, height * scale
+    pw, ph = round(width * scale), round(height * scale)
     pixmap = QPixmap(pw, ph)
     pixmap.fill(Qt.GlobalColor.transparent)
-    pixmap.setDevicePixelRatio(float(scale))
+    pixmap.setDevicePixelRatio(scale)
 
     top_hex, bot_hex, fg_hex, accent_hex = _cover_palette(title)
     painter = QPainter(pixmap)

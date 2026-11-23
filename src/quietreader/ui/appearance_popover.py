@@ -5,7 +5,8 @@ from dataclasses import replace
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QAbstractButton, QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from quietreader.i18n import tr
@@ -195,6 +196,13 @@ class _SliderControl(QWidget):
         self.slider.apply_palette(palette)
 
 
+class _AppearanceScrollArea(QScrollArea):
+    def sizeHint(self) -> QSize:
+        # Let the popover fit the full body whenever the window has room.
+        content = self.widget()
+        return content.sizeHint() if content is not None else super().sizeHint()
+
+
 class AppearancePopover(FloatingPopover):
     """Floating Readest-style appearance & typography card anchored inside MainWindow."""
 
@@ -217,29 +225,45 @@ class AppearancePopover(FloatingPopover):
         self.header_label.setObjectName("popoverHeading")
         outer.addWidget(self.header_label)
 
+        scroll = _AppearanceScrollArea(self)
+        scroll.setObjectName("appearanceScroll")
+        scroll.viewport().setObjectName("appearanceViewport")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("appearanceContent")
+        content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        body = QVBoxLayout(content)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(11)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
         # Theme 4-card visual selector
-        self.theme_section_label = QLabel("阅读主题", self)
+        self.theme_section_label = QLabel("阅读主题", content)
         self.theme_section_label.setObjectName("popoverLabel")
-        outer.addWidget(self.theme_section_label)
+        body.addWidget(self.theme_section_label)
 
         theme_grid = QGridLayout()
         theme_grid.setContentsMargins(0, 0, 0, 0)
         theme_grid.setHorizontalSpacing(7)
         self.theme_cards: dict[str, _ThemeCard] = {}
         for col, (code, label) in enumerate((("light", "纸白"), ("sepia", "暖纸"), ("dark", "夜读"), ("system", "系统"))):
-            card = _ThemeCard(code, label, self)
+            card = _ThemeCard(code, label, content)
+            card.setMinimumWidth(48)
             card.clicked.connect(lambda _checked=False, target=code: self._pick_theme(target))
             self.theme_cards[code] = card
             theme_grid.addWidget(card, 0, col)
-        outer.addLayout(theme_grid)
+        body.addLayout(theme_grid)
 
         # Font selector
-        self.font_label = QLabel("正文字体", self)
+        self.font_label = QLabel("正文字体", content)
         self.font_label.setObjectName("popoverLabel")
-        outer.addWidget(self.font_label)
-        self.font_combo = QFontComboBox(self)
+        body.addWidget(self.font_label)
+        self.font_combo = QFontComboBox(content)
+        self.font_combo.setSizeAdjustPolicy(QFontComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.font_combo.currentFontChanged.connect(self._emit_change)
-        outer.addWidget(self.font_combo)
+        body.addWidget(self.font_combo)
 
         # Typography sliders
         self.sliders: dict[str, _SliderControl] = {}
@@ -251,10 +275,10 @@ class AppearancePopover(FloatingPopover):
             ("padding", "页边距", 12, 72, 2, " px", 0),
         )
         for key, label, low, high, step, unit, dec in specs:
-            ctrl = _SliderControl(label, low, high, step, unit, dec, self)
+            ctrl = _SliderControl(label, low, high, step, unit, dec, content)
             ctrl.valueChanged.connect(lambda _v: self._emit_change())
             self.sliders[key] = ctrl
-            outer.addWidget(ctrl)
+            body.addWidget(ctrl)
 
         # Divider + footer
         sep = QFrame(self)
@@ -276,10 +300,12 @@ class AppearancePopover(FloatingPopover):
         footer.addWidget(self.more_button)
         outer.addLayout(footer)
 
-        self._wheel_filter = _PreferencesWheelFilter(None, self)
+        self._wheel_filter = _PreferencesWheelFilter(scroll.viewport(), self)
         self.font_combo.installEventFilter(self._wheel_filter)
         if self.font_combo.lineEdit():
             self.font_combo.lineEdit().installEventFilter(self._wheel_filter)
+        for control in self.sliders.values():
+            control.slider.installEventFilter(self._wheel_filter)
 
     def sync_settings(self, settings, palette: dict[str, str]):
         self._syncing = True
