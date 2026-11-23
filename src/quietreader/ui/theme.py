@@ -310,17 +310,22 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         color: {c['muted']};
         letter-spacing: 0.6px;
     }}
-    QPushButton#railDeleteBtn {{
+    QPushButton#railRenameBtn, QPushButton#railDeleteBtn {{
         color: {c['muted']};
         background: transparent;
         border: 1px solid transparent;
         border-radius: 5px;
-        padding: 0 6px;
+        padding: 0 4px;
         min-height: 0;
         font-size: 11px;
     }}
     QPushButton#railDeleteBtn:hover {{
         color: {danger};
+        background: {accent_hover};
+        border-color: {c['line']};
+    }}
+    QPushButton#railRenameBtn:hover {{
+        color: {c['accent']};
         background: {accent_hover};
         border-color: {c['line']};
     }}

@@ -8,45 +8,68 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 
 ## 界面预览
 
-### 阅读界面
+### 阅读
 
-![QuietReader 阅读界面](docs/screenshots/reading.png)
+![尚未打开书籍时的阅读页](docs/screenshots/reader-empty.png)
 
-**本地阅读：** 在侧栏查看目录、书签和资料，阅读章节内容与 EPUB 内嵌插图，并使用底部控件翻页。
+按 `Ctrl+O` 选择本地 TXT 或 EPUB，也可把文件拖入窗口。导入后，可以在书架打开书籍。
+
+![打开 EPUB 后的阅读界面，左侧是目录，底部显示章节和全书进度](docs/screenshots/reader-open.png)
+
+在左侧切换目录、书签和资料，点击上方的侧栏按钮可收起侧栏。底部进度条用于在当前章节内定位，翻页区右侧单独显示全书进度。重新打开书籍时会恢复上次的阅读位置。
 
 ### 专注模式
 
-![专注模式融入取色后的桌面背景](docs/screenshots/focus1.png)
+| 融入背景 | 按住 `Alt` 调整窗口 |
+| --- | --- |
+| ![专注模式下，正文融入取色后的深色背景](docs/screenshots/focus-blend.png) | ![按住 Alt 后显示专注窗口的虚线轮廓](docs/screenshots/focus-adjust.png) |
 
-**背景融合：** 先在配置中使用桌面取色器获取想融入的背景颜色，再进入专注模式；阅读窗口会尽量融入桌面背景。
-
-![按住 Alt 显示窗口轮廓并移动或缩放](docs/screenshots/focus2.png)
-
-**按住 Alt 调整窗口：** 专注模式下按住 `Alt` 会显示窗口轮廓，此时可拖动窗口或调整大小；松开按键后继续纯文字阅读。
+在「配置 → 专注与窗口」使用「桌面取色」采样背景，也可自行设置背景不透明度和文字颜色。按 `F10` 进入专注模式后，阅读控件会隐藏。按住默认调整键 `Alt` 可拖动窗口或拖动边缘缩放，松开后窗口轮廓消失。按 `Esc` 返回普通阅读界面。
 
 ### 书架
 
-![最近阅读](docs/screenshots/bookshelf1.png)
+![书架的封面网格视图，左侧显示最近阅读、所有书籍和自建分类](docs/screenshots/bookshelf.png)
 
-**最近阅读：** 从最近打开的书籍继续阅读，并快速回到上次阅读位置。
+在左侧查看最近阅读、所有书籍或指定分类。上方可按书名或作者搜索，按最近阅读、书名或阅读进度排序，并切换封面网格与列表视图。用「添加书籍」或拖入本地文件导入书籍。选中书籍后，可将它们拖到左侧分类，也可用书卡的「···」菜单修改显示书名。
 
-![所有书籍](docs/screenshots/bookshelf2.png)
+### 排版外观
 
-**所有书籍：** 浏览已添加到本地书架的书籍，并从书架页面添加新书。
+![阅读页顶部 Aa 按钮展开的排版外观浮层](docs/screenshots/appearance-popover.png)
 
-![书籍分类](docs/screenshots/bookshelf3.png)
+点击阅读页顶部的 `Aa`，即可切换纸白、暖纸、夜读或跟随系统的主题，调整正文字体、字号、行距、字距、段距和页边距。更改立即生效，点击「更多配置」可打开完整配置页。
 
-**书籍分类：** 创建分类并整理书架中的书籍，让不同主题的藏书更容易查找。
+### 阅读器配置
 
-### 配置与排版
+点击齿轮或按 `Ctrl+,` 打开配置。左侧切换配置分类，更改会自动保存。「数据与存储」可查看当前数据目录和配置文件路径。
 
-![阅读配置页面](docs/screenshots/peizhiyemian.png)
+<details>
+<summary>展开配置截图</summary>
 
-**阅读器配置：** 集中设置界面语言、主题和阅读外观等偏好。
+#### 外观与语言
 
-![排版调整实时预览](docs/screenshots/yuedupeizhi.png)
+![外观与语言配置页的主题卡片和语言选项](docs/screenshots/settings-appearance.png)
 
-**实时排版：** 调整字号、行距、字距、段距或页边距时，阅读区域会同步更新，方便直接比较效果。
+选择阅读主题和界面语言。界面语言可跟随系统，也可选简体中文或 English。
+
+#### 阅读与排版
+
+![阅读与排版配置页的字体选择器和排版滑块](docs/screenshots/settings-typography.png)
+
+选择正文字体，用滑块或两侧的加减按钮微调字号、间距和页边距。
+
+#### 专注与窗口
+
+![专注与窗口配置页的取色、不透明度、窗口调整键和托盘选项](docs/screenshots/settings-focus.png)
+
+设置专注模式的背景色、文字色和背景不透明度，并配置窗口调整键、置顶与关闭窗口时隐藏到系统托盘。
+
+#### 快捷键
+
+![快捷键配置页的全局快捷键开关和翻页、章节、专注模式按键](docs/screenshots/settings-shortcuts.png)
+
+点击对应的按键重新录入快捷键。开启全局快捷键后，可在使用其他应用时显示或隐藏阅读窗口。阅读窗口可见时，紧急退出键也可全局触发。
+
+</details>
 
 ## 功能
 
@@ -68,7 +91,7 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 | --- | --- |
 | 下一页 / 上一页 | `PageDown` / `PageUp` |
 | 下一章 / 上一章 | `Ctrl+PageDown` / `Ctrl+PageUp` |
-| 进入或退出专注模式 | `F10` 或 `Esc` |
+| 切换专注模式 / 退出专注模式 | `F10` / `Esc` |
 | 专注模式透明度切换（0% / 100%） | `F9` |
 | 添加书籍 / 配置 | `Ctrl+O` / `Ctrl+,` |
 | 显示 / 隐藏窗口 | `Ctrl+Alt+R` |
@@ -79,6 +102,14 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 ## 获取与运行
 
 **下载软件包：** [QuietReader 0.1.6 Windows x64 便携版](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip)（[SHA-256 校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip.sha256)）可在 [GitHub Releases](https://github.com/Nore07/Quiet-Reader/releases) 下载。压缩包不包含个人配置或书籍；解压后运行 `QuietReader.exe`，程序会在其旁边创建 `data\`。运行时请保留解压目录中的全部文件。
+
+**使用安装包**
+
+运行 `QuietReader-Setup-<版本>-x64.exe`，按向导完成安装。默认安装到当前用户的 `%LOCALAPPDATA%\Programs\QuietReader`，无需管理员权限，可选创建桌面快捷方式。
+
+- **原地升级**。先退出正在运行的 QuietReader，再运行新版安装包。检测到旧版安装时，向导会显示本次升级的目标目录，并沿用原目录，保留 `data` 中的书籍、书签、阅读进度和配置。
+- **更换安装目录**。先备份旧目录的整个 `data` 文件夹，通过 Windows 的「已安装的应用」卸载旧版，再安装到新目录。在完成页取消勾选「启动 QuietReader」，把备份的 `data` 复制到新 `QuietReader.exe` 旁边，再打开阅读器。如果用过 `--data-dir`，也请保留该自定义目录。
+- **从便携版转为安装版**。如果尚未安装 QuietReader，可在向导里选择原便携版的 `QuietReader.exe` 所在目录，沿用该目录的 `data`。
 
 **从源码运行：** 下载或克隆仓库后，需要 Python 3.12 或更新版本。在仓库根目录运行 PowerShell 命令：
 

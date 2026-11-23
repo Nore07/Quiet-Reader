@@ -1,11 +1,13 @@
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import os
 import sys
+from time import time
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QThreadPool, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QFontMetrics, QGuiApplication, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, QThreadPool, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QInputDialog, QLineEdit,
     QMessageBox, QListWidget, QListWidgetItem, QMainWindow, QMenu, QPushButton, QSizePolicy, QStackedWidget,
@@ -20,7 +22,7 @@ from quietreader.domain.models import Bookmark, Position, Settings, restore_posi
 from quietreader.ui.appearance_popover import AppearancePopover
 from quietreader.ui.controls import IconButton, SegmentedControl, ThinSlider
 from quietreader.ui.covers import render_cover_pixmap
-from quietreader.ui.icons import render_icon_pixmap, vector_icon
+from quietreader.ui.icons import vector_icon
 from quietreader.ui.reader import PageView
 from quietreader.ui.settings import SettingsDialog
 from quietreader.ui.settings_page import SettingsPage
@@ -38,6 +40,7 @@ from quietreader.persistence.store import (
 )
 from quietreader.library.shelf import SUPPORTED_SUFFIXES, ShelfError, ShelfManager, UNCLASSIFIED, book_id_for_path
 from quietreader.ui.shelf import ShelfPanel, display_title_for_record
+from quietreader.updates import ReleaseChecker, automatic_check_due
 
 
 def classify_dropped_urls(urls, max_items=MAX_BOOK_RECORDS):
@@ -307,6 +310,9 @@ class MainWindow(QMainWindow):
         self.save_timer.setSingleShot(True)
         self.save_timer.setInterval(350)
         self.save_timer.timeout.connect(self.save_state)
+        self.release_checker = ReleaseChecker(self)
+        self.release_checker.finished.connect(self._update_check_finished)
+        self._automatic_update_request = False
         self._build_ui()
         app = QApplication.instance()
         if app:
@@ -684,6 +690,7 @@ class MainWindow(QMainWindow):
         self.shelf.remove_requested.connect(self._confirm_remove_shelf_book)
         self.shelf.create_category_requested.connect(self.prompt_create_shelf_category)
         self.shelf.delete_category_requested.connect(self._confirm_delete_shelf_category)
+        self.shelf.rename_category_requested.connect(self.prompt_rename_shelf_category)
         self.main_pages.addWidget(self.shelf)
         self.settings_page = SettingsPage(self.store, self)
         self.settings_page.settings_changed.connect(self.apply_settings)
@@ -691,6 +698,7 @@ class MainWindow(QMainWindow):
         self.settings_page.capture_finished.connect(lambda: self._configure_hotkeys(capture_active=False))
         self.settings_page.notice_requested.connect(self.set_status)
         self.settings_page.close_requested.connect(self.close_settings)
+        self.settings_page.check_update_requested.connect(self.check_for_updates)
         self.main_pages.addWidget(self.settings_page)
         self.recent = self.shelf.recent
         body.addWidget(self.main_pages, 1)
@@ -981,6 +989,55 @@ class MainWindow(QMainWindow):
         name, accepted = QInputDialog.getText(self, self.t("新建分类"), self.t("分类名称"))
         if accepted:
             self.create_shelf_category(name)
+
+    def prompt_rename_shelf_category(self, category):
+        if self.loading:
+            return
+        if self.store.read_only:
+            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+            return
+        name, accepted = QInputDialog.getText(
+            self, self.t("重命名分类"), self.t("新分类名称"), text=category,
+        )
+        if accepted:
+            self.rename_shelf_category(category, name)
+
+    def rename_shelf_category(self, category, name):
+        if self.loading or self.store.read_only:
+            return False
+        try:
+            source, target, paths = self.shelf_manager.rename_category(category, name)
+        except (OSError, ShelfError) as error:
+            self._set_shelf_error(error)
+            return False
+        if source.name == target.name:
+            return True
+
+        previous_state = deepcopy(self.store.state)
+        open_book = (self.book.id, self.book.path) if self.book else None
+        for record in self.store.state["books"]:
+            try:
+                old_path = Path(record["path"]).expanduser().resolve()
+            except (OSError, RuntimeError):
+                continue
+            if old_path in paths:
+                self._remap_shelf_book(record, paths[old_path])
+        if not self.save_state():
+            try:
+                self.shelf_manager.rename_category(target.name, source.name)
+            except (OSError, ShelfError) as error:
+                self.set_status("分类改名后保存失败，无法恢复原分类：{error}", error=str(error))
+            else:
+                self.store.state = previous_state
+                if self.book and open_book:
+                    self.book.id, self.book.path = open_book
+            self._refresh_shelf()
+            return False
+
+        self._refresh_shelf()
+        self.shelf.select_category(target.name)
+        self.set_status("分类“{old}”已更名为“{name}”。", old=source.name, name=target.name)
+        return True
 
     def _remap_shelf_book(self, record, new_path):
         old_id = record["id"]
@@ -1889,6 +1946,7 @@ class MainWindow(QMainWindow):
         message = str(error)
         dynamic = (
             ("无法创建分类：", "无法创建分类：{error}"),
+            ("无法重命名分类：", "无法重命名分类：{error}"),
             ("复制书籍失败：", "复制书籍失败：{error}"),
             ("移动书籍失败：", "移动书籍失败：{error}"),
             ("删除书架书籍失败：", "删除书架书籍失败：{error}"),
@@ -1996,8 +2054,9 @@ class MainWindow(QMainWindow):
             drop_highlight=self._drag_hover_active and not self.focus_mode,
         ))
         if hasattr(self, "brand_mark"):
-            mark_color = palette["ink"] if palette.get("custom_background") else palette["accent"]
-            self.brand_mark.setPixmap(render_icon_pixmap("book", mark_color, 15))
+            self.brand_mark.setPixmap(
+                self.windowIcon().pixmap(QSize(22, 22), self.brand_mark.devicePixelRatioF())
+            )
         if hasattr(self, "settings_back_button"):
             self.settings_back_button.setIcon(vector_icon("back", palette.get("ink_secondary", palette["muted"]), 13))
         for control in self._themed_controls:
@@ -2008,9 +2067,36 @@ class MainWindow(QMainWindow):
         if hasattr(self, "settings_page"):
             self.settings_page.sync_settings(self.settings, ui_palette)
 
+    def check_for_updates_automatically(self):
+        if (self.settings.auto_check_updates and
+                automatic_check_due(self.store.state["last_update_check"], int(time()))):
+            self.check_for_updates(automatic=True)
+
+    def check_for_updates(self, *, automatic=False):
+        if self.closed or not self.release_checker.check():
+            return
+        self._automatic_update_request = automatic
+        self.store.state["last_update_check"] = int(time())
+        self.schedule_save()
+        self.settings_page.set_update_status("checking")
+
+    def _update_check_finished(self, release):
+        self.settings_page.set_update_status(release.status if release else "error", release)
+        if (self._automatic_update_request and self.settings.auto_check_updates and
+                release is not None and release.status == "available"):
+            self.set_status(
+                "发现新版本 {version}。",
+                version=release.version,
+                toast_action_text="查看更新",
+                toast_action=lambda: QDesktopServices.openUrl(QUrl(release.url)),
+            )
+
     def apply_settings(self, settings):
+        previously_enabled = self.settings.auto_check_updates
         self.settings = Settings.from_dict(settings.to_dict())
         settings = self.settings
+        if settings.auto_check_updates and not previously_enabled:
+            QTimer.singleShot(0, self.check_for_updates_automatically)
         was_visible = self.isVisible()
         bounds = self.geometry()
         flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint if self.focus_mode else Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
@@ -2210,7 +2296,7 @@ class MainWindow(QMainWindow):
 
     def save_state(self):
         if self.closed:
-            return
+            return False
         self.store.state["settings"] = self.settings.to_dict()
         self.store.state["last_browse_dir"] = self._last_browse_dir
         if not self.isMinimized() and not self.isMaximized():
@@ -2223,6 +2309,8 @@ class MainWindow(QMainWindow):
             self.store.save()
         except OSError:
             self.set_status("保存失败，请检查用户数据目录的权限和可用空间。")
+            return False
+        return True
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2481,6 +2569,7 @@ class MainWindow(QMainWindow):
     def shutdown(self):
         if self.closed:
             return
+        self.release_checker.stop()
         self._set_focus_adjust_active(False)
         app = QApplication.instance()
         if app:
