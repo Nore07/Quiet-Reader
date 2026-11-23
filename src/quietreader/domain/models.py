@@ -110,6 +110,7 @@ class Settings:
     auto_check_updates: bool = False
     focus_auto_background: bool = False
     focus_sample_trigger: str = "auto"
+    focus_complex_opacity: float = 0.20
 
     @classmethod
     def from_dict(cls, raw):
@@ -119,6 +120,7 @@ class Settings:
             ("font_size", 14, 42, int), ("line_height", 1.2, 2.5, float),
             ("padding", 12, 72, int), ("letter_spacing", 0, 5, float),
             ("paragraph_spacing", 0, 40, int), ("opacity", 0, 1, float),
+            ("focus_complex_opacity", 0, 1, float),
         ]:
             try:
                 value = float(raw.get(key, getattr(result, key)))

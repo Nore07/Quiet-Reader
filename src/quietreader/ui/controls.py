@@ -3,7 +3,7 @@
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QComboBox, QFrame, QHBoxLayout, QPushButton, QSizePolicy, QSlider,
+    QAbstractButton, QApplication, QComboBox, QFrame, QHBoxLayout, QPushButton, QScrollArea, QSizePolicy, QSlider,
 )
 
 from quietreader.ui.icons import render_icon_pixmap, vector_icon
@@ -328,9 +328,23 @@ class FloatingPopover(QFrame):
         parent = self.parentWidget()
         if parent is None:
             return
-        self.adjustSize()
-        width = min(self.sizeHint().width(), max(180, parent.width() - 24))
-        height = min(self.sizeHint().height(), max(120, parent.height() - 56))
+        scroll_areas = self.findChildren(QScrollArea)
+        scroll_positions = [
+            (area.verticalScrollBar(), area.verticalScrollBar().value())
+            for area in scroll_areas
+        ]
+        self.ensurePolished()
+        for area in scroll_areas:
+            inner = area.widget()
+            if inner is not None and inner.layout() is not None:
+                inner.layout().invalidate()
+                inner.layout().activate()
+        if self.layout() is not None:
+            self.layout().invalidate()
+            self.layout().activate()
+        hint = self.sizeHint().expandedTo(self.minimumSize())
+        width = min(hint.width(), max(180, parent.width() - 24))
+        height = min(hint.height(), max(120, parent.height() - 56))
         if self._anchor is not None and self._anchor.isVisible():
             origin = self._anchor.mapTo(parent, QPoint(0, self._anchor.height() + 6))
             if self._align == "right":
@@ -343,7 +357,12 @@ class FloatingPopover(QFrame):
             y = 48
         x = max(12, min(x, parent.width() - width - 12))
         y = max(12, min(y, parent.height() - height - 12))
-        self.setGeometry(x, y, width, height)
+        target = QRect(x, y, width, height)
+        if self.geometry() != target:
+            self.setGeometry(target)
+        for bar, value in scroll_positions:
+            if value > 0 and bar.maximum() > 0:
+                bar.setValue(min(value, bar.maximum()))
 
     def _install_filter(self):
         app = QApplication.instance()

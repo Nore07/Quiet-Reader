@@ -57,15 +57,29 @@ def capture_region(bounds: QRect) -> list[ScreenSample]:
     return samples
 
 
-def extract_perimeter_color(
+COMPLEX_COLOR_TOLERANCE = 18
+COMPLEX_DOMINANT_THRESHOLD = 0.65
+
+
+@dataclass(frozen=True)
+class PerimeterSample:
+    color: QColor
+    is_complex: bool = False
+    dominant_ratio: float = 0.0
+
+    def is_valid(self) -> bool:
+        return self.color.isValid()
+
+
+def analyze_perimeter_color(
     samples: list[ScreenSample],
     window_rect: QRect,
     gap: int = 3,
     band: int = 3,
-) -> QColor:
-    """Estimate the dominant host background color from pixels strictly outside window_rect."""
+) -> PerimeterSample:
+    """Estimate dominant host background color and whether the surrounding ring is complex."""
     if not samples or not window_rect.isValid() or window_rect.width() < 20 or window_rect.height() < 20:
-        return QColor()
+        return PerimeterSample(QColor())
     gap = max(1, int(gap))
     band = max(1, int(band))
     inset = min(10, max(0, min(window_rect.width(), window_rect.height()) // 6))
@@ -74,7 +88,7 @@ def extract_perimeter_color(
     y_start = window_rect.top() + inset
     y_end = window_rect.bottom() - inset
     if x_end < x_start or y_end < y_start:
-        return QColor()
+        return PerimeterSample(QColor())
 
     x_step = max(2, window_rect.width() // 72)
     y_step = max(2, window_rect.height() // 72)
@@ -102,7 +116,7 @@ def extract_perimeter_color(
                 break
 
     if not rgb_values:
-        return QColor()
+        return PerimeterSample(QColor())
 
     # Quantize to 8-step RGB buckets to find the dominant solid host surface,
     # then take the per-channel median across the peak cluster (ignoring text/border outliers).
@@ -120,7 +134,50 @@ def extract_perimeter_color(
     red = sorted(px[0] for px in inliers)[mid]
     green = sorted(px[1] for px in inliers)[mid]
     blue = sorted(px[2] for px in inliers)[mid]
-    return QColor(red, green, blue)
+
+    # Measure how much of the outer ring actually matches the dominant median surface.
+    # Tolerate subtle anti-aliasing / soft shadows, while flagging photos, gradients, and split panes.
+    close_count = sum(
+        1
+        for r, g, b in rgb_values
+        if max(abs(r - red), abs(g - green), abs(b - blue)) <= COMPLEX_COLOR_TOLERANCE
+    )
+    dominant_ratio = close_count / len(rgb_values)
+    return PerimeterSample(
+        QColor(red, green, blue),
+        is_complex=dominant_ratio < COMPLEX_DOMINANT_THRESHOLD,
+        dominant_ratio=dominant_ratio,
+    )
+
+
+def extract_perimeter_color(
+    samples: list[ScreenSample],
+    window_rect: QRect,
+    gap: int = 3,
+    band: int = 3,
+) -> QColor:
+    """Estimate the dominant host background color from pixels strictly outside window_rect."""
+    return analyze_perimeter_color(samples, window_rect, gap=gap, band=band).color
+
+
+def sample_window_perimeter(
+    window_rect: QRect,
+    capture=None,
+    gap: int = 3,
+    band: int = 3,
+) -> PerimeterSample:
+    """Capture pixels strictly outside window_rect without hiding the window and analyze the background."""
+    if not window_rect.isValid() or window_rect.width() < 20 or window_rect.height() < 20:
+        return PerimeterSample(QColor())
+    outer = max(1, int(gap)) + max(1, int(band))
+    expanded = window_rect.adjusted(-outer, -outer, outer, outer)
+    try:
+        samples = capture(expanded) if callable(capture) else capture_region(expanded)
+    except Exception:
+        return PerimeterSample(QColor())
+    if not samples:
+        return PerimeterSample(QColor())
+    return analyze_perimeter_color(samples, window_rect, gap=gap, band=band)
 
 
 def sample_window_perimeter_color(
@@ -130,17 +187,7 @@ def sample_window_perimeter_color(
     band: int = 3,
 ) -> QColor:
     """Capture pixels strictly outside window_rect without hiding the window and estimate background color."""
-    if not window_rect.isValid() or window_rect.width() < 20 or window_rect.height() < 20:
-        return QColor()
-    outer = max(1, int(gap)) + max(1, int(band))
-    expanded = window_rect.adjusted(-outer, -outer, outer, outer)
-    try:
-        samples = capture(expanded) if callable(capture) else capture_region(expanded)
-    except Exception:
-        return QColor()
-    if not samples:
-        return QColor()
-    return extract_perimeter_color(samples, window_rect, gap=gap, band=band)
+    return sample_window_perimeter(window_rect, capture=capture, gap=gap, band=band).color
 
 
 class ColorOverlay(QWidget):

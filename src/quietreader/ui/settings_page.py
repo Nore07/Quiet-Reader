@@ -240,11 +240,13 @@ class SettingsPage(QWidget):
         self.picker.selected.connect(self._on_picked_bg_color)
         self.picker.failed.connect(lambda msg: self.notice_requested.emit(msg))
 
-        # Prevent accidental wheel scrolling on font combo inside ScrollArea
+        # Prevent accidental wheel scrolling on font combo and opacity sliders inside ScrollArea
         self._wheel_filter = _PreferencesWheelFilter(self.scroll.viewport(), self)
         self.font_combo.installEventFilter(self._wheel_filter)
         if self.font_combo.lineEdit():
             self.font_combo.lineEdit().installEventFilter(self._wheel_filter)
+        self.opacity_slider.installEventFilter(self._wheel_filter)
+        self.complex_opacity_slider.installEventFilter(self._wheel_filter)
 
         self.select_section("appearance")
 
@@ -548,6 +550,28 @@ class SettingsPage(QWidget):
             "设为 0% 时背景全透明、文字保持不透明；默认 F9 在 0% 与 100% 间切换",
             opacity_wrap, responsive=True, add_divider_before=True,
         )
+
+        complex_opacity_wrap = QWidget(card1)
+        cop_row = QHBoxLayout(complex_opacity_wrap)
+        cop_row.setContentsMargins(0, 0, 0, 0)
+        cop_row.setSpacing(10)
+        self.complex_opacity_slider = ThinSlider(Qt.Orientation.Horizontal, complex_opacity_wrap)
+        self.complex_opacity_slider.setRange(0, 100)
+        self.complex_opacity_slider.setMinimumWidth(140)
+        self.complex_opacity_slider.setMaximumWidth(190)
+        self.complex_opacity_slider.valueChanged.connect(self._on_complex_opacity_changed)
+        self._themed_widgets.append(self.complex_opacity_slider)
+        self.complex_opacity_value = QLabel("20%", complex_opacity_wrap)
+        self.complex_opacity_value.setObjectName("popoverValue")
+        self.complex_opacity_value.setFixedWidth(38)
+        self.complex_opacity_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        cop_row.addWidget(self.complex_opacity_slider, 1)
+        cop_row.addWidget(self.complex_opacity_value)
+        self._add_card_row(
+            c1, "复杂背景不透明度上限",
+            "开启自动适配且检测到复杂背景时，不透明度自动降至不超过此值（默认 20%）",
+            complex_opacity_wrap, responsive=True, add_divider_before=True,
+        )
         layout.addWidget(card1)
 
         # Card 2: Window behavior
@@ -761,6 +785,9 @@ class SettingsPage(QWidget):
         pct = round(max(0.0, min(1.0, settings.opacity)) * 100)
         self.opacity_slider.setValue(pct)
         self.opacity_value.setText(f"{pct}%")
+        complex_pct = round(max(0.0, min(1.0, settings.focus_complex_opacity)) * 100)
+        self.complex_opacity_slider.setValue(complex_pct)
+        self.complex_opacity_value.setText(f"{complex_pct}%")
         self.adjust_key_control.set_current(settings.focus_adjust_key, emit=False)
         self.sample_trigger_control.set_current(settings.focus_sample_trigger, emit=False)
         for key, sw in self.toggles.items():
@@ -831,6 +858,7 @@ class SettingsPage(QWidget):
                 background_color=defaults.background_color,
                 text_color=defaults.text_color,
                 opacity=defaults.opacity,
+                focus_complex_opacity=defaults.focus_complex_opacity,
                 focus_adjust_key=defaults.focus_adjust_key,
                 always_on_top=defaults.always_on_top,
                 close_to_tray=defaults.close_to_tray,
@@ -968,6 +996,12 @@ class SettingsPage(QWidget):
         if self._syncing:
             return
         self._commit(replace(self._settings, opacity=round(pct / 100.0, 2)))
+
+    def _on_complex_opacity_changed(self, pct: int):
+        self.complex_opacity_value.setText(f"{pct}%")
+        if self._syncing:
+            return
+        self._commit(replace(self._settings, focus_complex_opacity=round(pct / 100.0, 2)))
 
     def _on_adjust_key_changed(self, key: str):
         if self._syncing:

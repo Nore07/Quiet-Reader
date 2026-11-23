@@ -37,6 +37,7 @@ class FocusPopover(FloatingPopover):
         super().__init__(parent)
         self._settings = None
         self._sampled_color = ""
+        self._sampled_complex = False
         self._has_book = False
         self._syncing = False
         self._language = "system"
@@ -128,10 +129,14 @@ class FocusPopover(FloatingPopover):
         action_row.addWidget(self.reset_color_button, 1)
         body.addLayout(action_row)
 
-        # Row 4: Focus background opacity slider
+        # Row 4: Focus background opacity & complex-background opacity cap sliders
         self.opacity_slider = _SliderControl("背景不透明度", 0, 100, 1, "%", 0, content)
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         body.addWidget(self.opacity_slider)
+
+        self.complex_opacity_slider = _SliderControl("复杂背景不透明度上限", 0, 100, 1, "%", 0, content)
+        self.complex_opacity_slider.valueChanged.connect(self._on_complex_opacity_changed)
+        body.addWidget(self.complex_opacity_slider)
 
         # Primary CTA pinned below scroll area so 1-click Focus entry stays visible on short windows
         self.enter_focus_button = QPushButton("进入专注模式 (F10)", self)
@@ -163,6 +168,7 @@ class FocusPopover(FloatingPopover):
 
         self._wheel_filter = _PreferencesWheelFilter(scroll.viewport(), self)
         self.opacity_slider.slider.installEventFilter(self._wheel_filter)
+        self.complex_opacity_slider.slider.installEventFilter(self._wheel_filter)
 
     @staticmethod
     def _action_btn(label: str, callback, parent: QWidget) -> QPushButton:
@@ -173,10 +179,20 @@ class FocusPopover(FloatingPopover):
         btn.clicked.connect(callback)
         return btn
 
-    def sync_settings(self, settings, palette: dict[str, str], sampled_color: str = "", has_book: bool = True):
+    def sync_settings(
+        self,
+        settings,
+        palette: dict[str, str],
+        sampled_color: str = "",
+        has_book: bool = True,
+        sampled_complex: bool = False,
+    ):
         self._syncing = True
+        prev_auto_vis = self.trigger_wrap.isVisible()
+        prev_lang = self._language
         self._settings = replace(settings)
         self._sampled_color = sampled_color
+        self._sampled_complex = bool(sampled_complex)
         self._has_book = bool(has_book)
         self._language = settings.language
         self._palette = dict(palette)
@@ -186,6 +202,7 @@ class FocusPopover(FloatingPopover):
         self.auto_toggle.apply_palette(palette)
         self.trigger_wrap.setVisible(auto_on)
         self.trigger_control.set_current(settings.focus_sample_trigger, emit=False)
+        self.complex_opacity_slider.setVisible(auto_on)
 
         self.resample_button.setVisible(auto_on)
         self.choose_color_button.setVisible(not auto_on)
@@ -195,7 +212,8 @@ class FocusPopover(FloatingPopover):
         if auto_on:
             chip_hex = sampled_color
             chip_label = sampled_color.upper() if sampled_color else tr("未采样", self._language)
-            self.color_label.setText(tr("已采外沿底色", self._language))
+            color_heading = "已采外沿底色 · 复杂背景" if (sampled_color and self._sampled_complex) else "已采外沿底色"
+            self.color_label.setText(tr(color_heading, self._language))
         else:
             chip_hex = settings.background_color
             chip_label = settings.background_color.upper() if settings.background_color else tr("主题色", self._language)
@@ -205,6 +223,10 @@ class FocusPopover(FloatingPopover):
         self.opacity_slider.set_value(round(max(0.0, min(1.0, settings.opacity)) * 100))
         self.opacity_slider.retranslate(self._language)
         self.opacity_slider.apply_palette(palette)
+
+        self.complex_opacity_slider.set_value(round(max(0.0, min(1.0, settings.focus_complex_opacity)) * 100))
+        self.complex_opacity_slider.retranslate(self._language)
+        self.complex_opacity_slider.apply_palette(palette)
 
         self.header_label.setText(tr("专注模式", self._language))
         self.shortcut_badge.setText(tr("{key} 进出", self._language, key=settings.focus_key))
@@ -225,7 +247,7 @@ class FocusPopover(FloatingPopover):
         self.more_button.setText(f"{tr('更多配置', self._language)} →")
 
         self._syncing = False
-        if not self.isHidden():
+        if not self.isHidden() and (prev_auto_vis != auto_on or prev_lang != self._language):
             self.reposition()
 
     def _emit_updated(self, updated):
@@ -280,6 +302,13 @@ class FocusPopover(FloatingPopover):
         if self._syncing or self._settings is None:
             return
         self._emit_updated(replace(self._settings, opacity=round(max(0.0, min(100.0, value)) / 100.0, 2)))
+
+    def _on_complex_opacity_changed(self, value: float):
+        if self._syncing or self._settings is None:
+            return
+        self._emit_updated(
+            replace(self._settings, focus_complex_opacity=round(max(0.0, min(100.0, value)) / 100.0, 2))
+        )
 
     def _on_enter_focus(self):
         if not self._has_book:

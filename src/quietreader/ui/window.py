@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from quietreader.content.local import ENCODINGS, ImportError as BookImportError, load_book, read_epub_title
-from quietreader.desktop.color_picker import DesktopColorPicker, sample_window_perimeter_color
+from quietreader.desktop.color_picker import DesktopColorPicker, sample_window_perimeter
 from quietreader.desktop.geometry import visible_bounds
 from quietreader.desktop.hotkey import GlobalHotkey
 from quietreader.desktop.window_effects import set_window_border_hidden
@@ -289,6 +289,7 @@ class MainWindow(QMainWindow):
         self._themed_controls = []
         self._focus_opacity_override = None
         self._sampled_focus_color = ""
+        self._sampled_focus_complex = False
         self._focus_geometry_dirty = False
         self._perimeter_capture = None
         self._focus_adjust_active = False
@@ -1514,6 +1515,7 @@ class MainWindow(QMainWindow):
             self.focus_popover.sync_settings(
                 self.settings, colors(self.settings.theme),
                 sampled_color=self._sampled_focus_color, has_book=ready,
+                sampled_complex=self._sampled_focus_complex,
             )
         if hasattr(self, "tray_focus_action"):
             self.tray_focus_action.setEnabled(ready)
@@ -1901,6 +1903,14 @@ class MainWindow(QMainWindow):
             return self._sampled_focus_color
         return self.settings.background_color
 
+    def _effective_focus_opacity(self) -> float:
+        if self._focus_opacity_override is not None:
+            return self._focus_opacity_override
+        opacity = self.settings.opacity
+        if self.settings.focus_auto_background and self._sampled_focus_complex:
+            return min(opacity, self.settings.focus_complex_opacity)
+        return opacity
+
     def _on_focus_eyedropper_selected(self, color):
         if color.isValid():
             self.apply_settings(
@@ -1911,14 +1921,15 @@ class MainWindow(QMainWindow):
         """Sample the dominant desktop color strictly outside the window without hiding it."""
         if self.closed or self._window_hidden:
             return False
-        sampled = sample_window_perimeter_color(self.geometry(), capture=self._perimeter_capture)
-        if not sampled.isValid():
+        sample = sample_window_perimeter(self.geometry(), capture=self._perimeter_capture)
+        if not sample.is_valid():
             if notify:
                 self.set_status("无法采样窗口周边颜色，将保持当前配色。")
             return False
-        hex_color = sampled.name().lower()
+        hex_color = sample.color.name().lower()
         changed = hex_color != self._sampled_focus_color
         self._sampled_focus_color = hex_color
+        self._sampled_focus_complex = sample.is_complex
         if force_enable and not self.settings.focus_auto_background:
             self.apply_settings(replace(self.settings, focus_auto_background=True))
         else:
@@ -1926,7 +1937,14 @@ class MainWindow(QMainWindow):
             if self.focus_mode and changed:
                 self.reader.reflow()
         if notify:
-            self.set_status("已自动采样周边底色：{color}", color=hex_color.upper())
+            if sample.is_complex:
+                cap_pct = round(min(self.settings.opacity, self.settings.focus_complex_opacity) * 100)
+                self.set_status(
+                    "已自动采样周边底色：{color}（复杂背景，不透明度上限 {opacity}%）",
+                    color=hex_color.upper(), opacity=cap_pct,
+                )
+            else:
+                self.set_status("已自动采样周边底色：{color}", color=hex_color.upper())
         return True
 
     def manual_resample_focus_background(self):
@@ -1971,6 +1989,7 @@ class MainWindow(QMainWindow):
                 self.settings, colors(self.settings.theme),
                 sampled_color=self._sampled_focus_color,
                 has_book=self.book is not None,
+                sampled_complex=self._sampled_focus_complex,
             )
             self.focus_button.setChecked(True)
             self.focus_popover.open_for(self.focus_button, align="right")
@@ -1994,9 +2013,10 @@ class MainWindow(QMainWindow):
         self._set_drag_hover_active(False)
         self._focus_opacity_override = None
         if entering and self.settings.focus_auto_background and self.settings.focus_sample_trigger == "auto":
-            sampled = sample_window_perimeter_color(self.geometry(), capture=self._perimeter_capture)
-            if sampled.isValid():
-                self._sampled_focus_color = sampled.name().lower()
+            sample = sample_window_perimeter(self.geometry(), capture=self._perimeter_capture)
+            if sample.is_valid():
+                self._sampled_focus_color = sample.color.name().lower()
+                self._sampled_focus_complex = sample.is_complex
         self.focus_mode = entering
         self.setAcceptDrops(not entering)
         self.reader.focus_mode = entering
@@ -2017,7 +2037,7 @@ class MainWindow(QMainWindow):
     def toggle_focus_opacity(self):
         if not self.focus_mode:
             return
-        current = self.settings.opacity if self._focus_opacity_override is None else self._focus_opacity_override
+        current = self._effective_focus_opacity()
         self._focus_opacity_override = 0.0 if current > 0 else 1.0
         self._apply_window_style()
 
@@ -2144,6 +2164,7 @@ class MainWindow(QMainWindow):
                 self.settings, colors(self.settings.theme),
                 sampled_color=self._sampled_focus_color,
                 has_book=self.book is not None,
+                sampled_complex=self._sampled_focus_complex,
             )
         if hasattr(self, "settings_page"):
             self.settings_page.retranslate(self.settings.language)
@@ -2166,7 +2187,7 @@ class MainWindow(QMainWindow):
 
     def _apply_window_style(self):
         if self.focus_mode:
-            opacity = self.settings.opacity if self._focus_opacity_override is None else self._focus_opacity_override
+            opacity = self._effective_focus_opacity()
             if self._focus_adjust_active and opacity == 0:
                 # A fully transparent surface can miss mouse input. Make only
                 # that case hit-testable while Alt is held; preserve every
@@ -2203,6 +2224,7 @@ class MainWindow(QMainWindow):
                 self.settings, ui_palette,
                 sampled_color=self._sampled_focus_color,
                 has_book=self.book is not None,
+                sampled_complex=self._sampled_focus_complex,
             )
         if hasattr(self, "settings_page"):
             self.settings_page.sync_settings(self.settings, ui_palette)
@@ -2246,9 +2268,10 @@ class MainWindow(QMainWindow):
             and self.isVisible()
             and not self._window_hidden
         ):
-            sampled = sample_window_perimeter_color(self.geometry(), capture=self._perimeter_capture)
-            if sampled.isValid():
-                self._sampled_focus_color = sampled.name().lower()
+            sample = sample_window_perimeter(self.geometry(), capture=self._perimeter_capture)
+            if sample.is_valid():
+                self._sampled_focus_color = sample.color.name().lower()
+                self._sampled_focus_complex = sample.is_complex
         was_visible = self.isVisible()
         bounds = self.geometry()
         flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint if self.focus_mode else Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
