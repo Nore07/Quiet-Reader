@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from quietreader.content.local import ENCODINGS, ImportError as BookImportError, load_book, read_epub_title
+from quietreader.desktop.color_picker import DesktopColorPicker, sample_window_perimeter_color
 from quietreader.desktop.geometry import visible_bounds
 from quietreader.desktop.hotkey import GlobalHotkey
 from quietreader.desktop.window_effects import set_window_border_hidden
@@ -22,6 +23,7 @@ from quietreader.domain.models import Bookmark, Position, Settings, restore_posi
 from quietreader.ui.appearance_popover import AppearancePopover
 from quietreader.ui.controls import IconButton, SegmentedControl, ThinSlider
 from quietreader.ui.covers import render_cover_pixmap
+from quietreader.ui.focus_popover import FocusPopover
 from quietreader.ui.icons import vector_icon
 from quietreader.ui.reader import PageView
 from quietreader.ui.settings import SettingsDialog
@@ -286,6 +288,9 @@ class MainWindow(QMainWindow):
         self._pre_settings_page = None
         self._themed_controls = []
         self._focus_opacity_override = None
+        self._sampled_focus_color = ""
+        self._focus_geometry_dirty = False
+        self._perimeter_capture = None
         self._focus_adjust_active = False
         self._focus_adjust_drag = None
         self._focus_system_drag_active = False
@@ -313,6 +318,13 @@ class MainWindow(QMainWindow):
         self.release_checker = ReleaseChecker(self)
         self.release_checker.finished.connect(self._update_check_finished)
         self._automatic_update_request = False
+        self._focus_resample_timer = QTimer(self)
+        self._focus_resample_timer.setSingleShot(True)
+        self._focus_resample_timer.setInterval(140)
+        self._focus_resample_timer.timeout.connect(self._run_scheduled_focus_resample)
+        self._focus_picker = DesktopColorPicker(self)
+        self._focus_picker.selected.connect(self._on_focus_eyedropper_selected)
+        self._focus_picker.failed.connect(self.set_status)
         self._build_ui()
         app = QApplication.instance()
         if app:
@@ -474,7 +486,7 @@ class MainWindow(QMainWindow):
         self.pin_button = self._icon_button("pin", self.toggle_pin, "置顶", size=15, checkable=True)
         self.topbar_actions_layout.addWidget(self.pin_button)
 
-        self.focus_button = self._icon_button("focus", self.toggle_focus, "专注", size=15, checkable=True)
+        self.focus_button = self._icon_button("focus", self.show_focus_panel, "专注", size=15, checkable=True)
         self.topbar_actions_layout.addWidget(self.focus_button)
 
         self.config_button = self._icon_button("settings", self.toggle_settings, "配置", size=15, checkable=True)
@@ -637,6 +649,7 @@ class MainWindow(QMainWindow):
         self.reader.link_activated.connect(self.open_epub_link)
         self.reader.exit_focus.connect(lambda: self.toggle_focus() if self.focus_mode else None)
         self.reader.focus_requested.connect(self.toggle_focus)
+        self.reader.resample_requested.connect(self.manual_resample_focus_background)
         self.reader.visibility_requested.connect(self.toggle_visible)
         self.reader.emergency_requested.connect(self.emergency_exit)
         self.reader.reflowed.connect(self._update_progress)
@@ -736,6 +749,9 @@ class MainWindow(QMainWindow):
         self.focus_opacity_shortcut = QShortcut(QKeySequence(self.settings.focus_opacity_key), self)
         self.focus_opacity_shortcut.activated.connect(self.toggle_focus_opacity)
         self.focus_opacity_shortcut.setAutoRepeat(False)
+        self.focus_resample_shortcut = QShortcut(QKeySequence(self.settings.focus_resample_key), self)
+        self.focus_resample_shortcut.activated.connect(self.manual_resample_focus_background)
+        self.focus_resample_shortcut.setAutoRepeat(False)
         self.escape_shortcut = QShortcut(QKeySequence("Esc"), self)
         self.escape_shortcut.activated.connect(self._handle_escape)
         self.escape_shortcut.setEnabled(False)
@@ -748,8 +764,15 @@ class MainWindow(QMainWindow):
         self.toast = ToastNotice(self.surface)
         self.appearance_popover = AppearancePopover(self.surface)
         self.appearance_popover.settings_changed.connect(self.apply_settings)
-        self.appearance_popover.more_settings_requested.connect(self.show_settings)
+        self.appearance_popover.more_settings_requested.connect(lambda: self.show_settings(section="reading"))
         self.appearance_popover.dismissed.connect(lambda: self.layout_button.setChecked(False))
+        self.focus_popover = FocusPopover(self.surface)
+        self.focus_popover.settings_changed.connect(self.apply_settings)
+        self.focus_popover.enter_focus_requested.connect(self.toggle_focus)
+        self.focus_popover.resample_requested.connect(self.manual_resample_focus_background)
+        self.focus_popover.eyedropper_requested.connect(self._focus_picker.begin)
+        self.focus_popover.more_settings_requested.connect(lambda: self.show_settings(section="focus"))
+        self.focus_popover.dismissed.connect(lambda: self.focus_button.setChecked(self.focus_mode))
         self.main_pages.currentChanged.connect(self._main_page_changed)
         self._update_sidebar_book_card()
         self._update_progress()
@@ -1486,7 +1509,12 @@ class MainWindow(QMainWindow):
         self.previous_chapter.setEnabled(ready and self._chapter_destination(-1) is not None)
         self.next_chapter.setEnabled(ready and self._chapter_destination(1) is not None)
         self.progress.setEnabled(ready)
-        self.focus_button.setEnabled(ready)
+        self.focus_button.setEnabled(True)
+        if hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
+            self.focus_popover.sync_settings(
+                self.settings, colors(self.settings.theme),
+                sampled_color=self._sampled_focus_color, has_book=ready,
+            )
         if hasattr(self, "tray_focus_action"):
             self.tray_focus_action.setEnabled(ready)
         if ready:
@@ -1815,6 +1843,8 @@ class MainWindow(QMainWindow):
             return
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.dismiss()
         self._refresh_shelf()
         self.main_pages.setCurrentWidget(self.shelf)
         self._sync_page_navigation()
@@ -1862,18 +1892,111 @@ class MainWindow(QMainWindow):
         values["always_on_top"] = checked
         self.apply_settings(Settings.from_dict(values))
 
+    @property
+    def language(self):
+        return self.settings.language
+
+    def _effective_focus_background(self) -> str:
+        if self.settings.focus_auto_background and self._sampled_focus_color:
+            return self._sampled_focus_color
+        return self.settings.background_color
+
+    def _on_focus_eyedropper_selected(self, color):
+        if color.isValid():
+            self.apply_settings(
+                replace(self.settings, background_color=color.name().lower(), focus_auto_background=False)
+            )
+
+    def resample_focus_background(self, *, notify=False, force_enable=False) -> bool:
+        """Sample the dominant desktop color strictly outside the window without hiding it."""
+        if self.closed or self._window_hidden:
+            return False
+        sampled = sample_window_perimeter_color(self.geometry(), capture=self._perimeter_capture)
+        if not sampled.isValid():
+            if notify:
+                self.set_status("无法采样窗口周边颜色，将保持当前配色。")
+            return False
+        hex_color = sampled.name().lower()
+        changed = hex_color != self._sampled_focus_color
+        self._sampled_focus_color = hex_color
+        if force_enable and not self.settings.focus_auto_background:
+            self.apply_settings(replace(self.settings, focus_auto_background=True))
+        else:
+            self._apply_window_style()
+            if self.focus_mode and changed:
+                self.reader.reflow()
+        if notify:
+            self.set_status("已自动采样周边底色：{color}", color=hex_color.upper())
+        return True
+
+    def manual_resample_focus_background(self):
+        if not self.focus_mode and self.main_pages.currentWidget() is not self.reader_page:
+            return
+        self.resample_focus_background(notify=not self.focus_mode, force_enable=True)
+
+    def _schedule_auto_focus_resample(self, delay_ms: int = 140):
+        if (
+            not self.focus_mode
+            or not self.settings.focus_auto_background
+            or self.settings.focus_sample_trigger != "auto"
+            or self.closed
+            or self._window_hidden
+        ):
+            return
+        self._focus_resample_timer.start(delay_ms)
+
+    def _run_scheduled_focus_resample(self):
+        if (
+            not self.focus_mode
+            or self._focus_adjust_active
+            or not self.settings.focus_auto_background
+            or self.settings.focus_sample_trigger != "auto"
+            or self.closed
+            or self._window_hidden
+        ):
+            return
+        self.resample_focus_background(notify=False, force_enable=False)
+
+    def show_focus_panel(self):
+        if self.focus_mode:
+            self.toggle_focus()
+            return
+        if hasattr(self, "appearance_popover"):
+            self.appearance_popover.dismiss()
+        if hasattr(self, "focus_popover"):
+            if not self.focus_popover.isHidden():
+                self.focus_popover.dismiss()
+                return
+            self.focus_popover.sync_settings(
+                self.settings, colors(self.settings.theme),
+                sampled_color=self._sampled_focus_color,
+                has_book=self.book is not None,
+            )
+            self.focus_button.setChecked(True)
+            self.focus_popover.open_for(self.focus_button, align="right")
+
     def toggle_focus(self, checked=None):
         if not self.book:
             return
         entering = not self.focus_mode
         if entering:
             self.show_reading_page()
+            if hasattr(self, "appearance_popover"):
+                self.appearance_popover.dismiss()
+            if hasattr(self, "focus_popover"):
+                self.focus_popover.dismiss()
             self._pre_focus_maximized = self.isMaximized()
             self._chrome_visibility = {widget: not widget.isHidden() for widget in self.chrome_widgets}
+        self._focus_resample_timer.stop()
+        self._focus_geometry_dirty = False
         self._set_focus_adjust_active(False)
         self._drag_has_valid = False
         self._set_drag_hover_active(False)
         self._focus_opacity_override = None
+        if entering and self.settings.focus_auto_background and self.settings.focus_sample_trigger == "auto":
+            sampled = sample_window_perimeter_color(self.geometry(), capture=self._perimeter_capture)
+            if sampled.isValid():
+                self._sampled_focus_color = sampled.name().lower()
         self.focus_mode = entering
         self.setAcceptDrops(not entering)
         self.reader.focus_mode = entering
@@ -1883,6 +2006,8 @@ class MainWindow(QMainWindow):
             for widget, visible in self._chrome_visibility.items():
                 widget.setVisible(visible)
         self.apply_settings(self.settings)
+        self._focus_resample_timer.stop()
+        self._focus_geometry_dirty = False
         if not entering and self._pre_focus_maximized:
             self.showMaximized()
         self.raise_()
@@ -2014,6 +2139,12 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("QuietReader")
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.sync_settings(self.settings, colors(self.settings.theme))
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.sync_settings(
+                self.settings, colors(self.settings.theme),
+                sampled_color=self._sampled_focus_color,
+                has_book=self.book is not None,
+            )
         if hasattr(self, "settings_page"):
             self.settings_page.retranslate(self.settings.language)
         if hasattr(self, "settings_back_button"):
@@ -2045,7 +2176,10 @@ class MainWindow(QMainWindow):
                 alpha = round(opacity * 255)
         else:
             alpha = 255
-        background_color = self.settings.background_color if self.focus_mode else ""
+        effective_bg = self._effective_focus_background()
+        background_color = effective_bg if self.focus_mode else ""
+        if hasattr(self, "reader"):
+            self.reader.focus_background_override = effective_bg
         palette = colors(self.settings.theme, background_color)
         self.setStyleSheet(stylesheet(
             palette, alpha,
@@ -2064,6 +2198,12 @@ class MainWindow(QMainWindow):
         ui_palette = colors(self.settings.theme)
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.sync_settings(self.settings, ui_palette)
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.sync_settings(
+                self.settings, ui_palette,
+                sampled_color=self._sampled_focus_color,
+                has_book=self.book is not None,
+            )
         if hasattr(self, "settings_page"):
             self.settings_page.sync_settings(self.settings, ui_palette)
 
@@ -2093,10 +2233,22 @@ class MainWindow(QMainWindow):
 
     def apply_settings(self, settings):
         previously_enabled = self.settings.auto_check_updates
+        prev_auto = self.settings.focus_auto_background
         self.settings = Settings.from_dict(settings.to_dict())
         settings = self.settings
         if settings.auto_check_updates and not previously_enabled:
             QTimer.singleShot(0, self.check_for_updates_automatically)
+        if (
+            not prev_auto
+            and settings.focus_auto_background
+            and settings.focus_sample_trigger == "auto"
+            and not self._sampled_focus_color
+            and self.isVisible()
+            and not self._window_hidden
+        ):
+            sampled = sample_window_perimeter_color(self.geometry(), capture=self._perimeter_capture)
+            if sampled.isValid():
+                self._sampled_focus_color = sampled.name().lower()
         was_visible = self.isVisible()
         bounds = self.geometry()
         flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint if self.focus_mode else Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
@@ -2112,9 +2264,11 @@ class MainWindow(QMainWindow):
         self.pin_button.setChecked(settings.always_on_top)
         self.reader.apply_settings(settings)
         self._sync_page_navigation()
-        self.focus_button.setChecked(self.focus_mode)
+        focus_popover_open = hasattr(self, "focus_popover") and not self.focus_popover.isHidden()
+        self.focus_button.setChecked(self.focus_mode or focus_popover_open)
         self.focus_shortcut.setKey(QKeySequence(settings.focus_key))
         self.focus_opacity_shortcut.setKey(QKeySequence(settings.focus_opacity_key))
+        self.focus_resample_shortcut.setKey(QKeySequence(settings.focus_resample_key))
         self.visibility_shortcut.setKey(QKeySequence(settings.hotkey))
         self.emergency_shortcut.setKey(QKeySequence(settings.emergency_key))
         self.escape_shortcut.setEnabled(
@@ -2129,7 +2283,10 @@ class MainWindow(QMainWindow):
             self.show()
             self.activateWindow()
             on_reader = self.main_pages.currentWidget() is self.reader_page
-            popover_open = hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden()
+            popover_open = (
+                (hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden())
+                or (hasattr(self, "focus_popover") and not self.focus_popover.isHidden())
+            )
             if on_reader and not popover_open:
                 self.reader.setFocus()
         set_window_border_hidden(self, self.focus_mode)
@@ -2141,6 +2298,8 @@ class MainWindow(QMainWindow):
                 self.toast.dismiss()
             if hasattr(self, "appearance_popover"):
                 self.appearance_popover.dismiss()
+            if hasattr(self, "focus_popover"):
+                self.focus_popover.dismiss()
         self.schedule_save()
 
     def _sync_reader_navigation_labels(self):
@@ -2197,18 +2356,22 @@ class MainWindow(QMainWindow):
         else:
             self.show_settings()
 
-    def show_settings(self):
+    def show_settings(self, section=None):
         if self.focus_mode:
             self.toggle_focus()
         if self.isHidden() or self.isMinimized():
             self.reveal()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.dismiss()
         if hasattr(self, "settings_page"):
             current = self.main_pages.currentWidget()
             if current is not self.settings_page:
                 self._pre_settings_page = current
             self.settings_page.sync_settings(self.settings, colors(self.settings.theme))
+            if isinstance(section, str) and section:
+                self.settings_page.select_section(section)
             self.main_pages.setCurrentWidget(self.settings_page)
             self._sync_page_navigation()
             return
@@ -2248,6 +2411,8 @@ class MainWindow(QMainWindow):
     def show_layout_panel(self):
         if self.focus_mode:
             self.toggle_focus()
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.dismiss()
         if hasattr(self, "appearance_popover"):
             if not self.appearance_popover.isHidden():
                 self.appearance_popover.dismiss()
@@ -2324,8 +2489,15 @@ class MainWindow(QMainWindow):
             self.toast.reposition(self._toast_bottom_margin())
         if hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden():
             self.appearance_popover.reposition()
+        if hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
+            self.focus_popover.reposition()
+        if self.focus_mode:
+            self._focus_geometry_dirty = True
+            if not self._focus_adjust_active:
+                self._schedule_auto_focus_resample(160)
 
     def showEvent(self, event):
+        was_hidden = self._window_hidden
         self._window_hidden = False
         super().showEvent(event)
         self._configure_hotkeys()
@@ -2335,15 +2507,23 @@ class MainWindow(QMainWindow):
             self._sync_reader_navigation_labels()
         if hasattr(self, "toast") and not self.toast.isHidden():
             self.toast.reposition(self._toast_bottom_margin())
+        if was_hidden and self.focus_mode:
+            self._schedule_auto_focus_resample(140)
 
     def hideEvent(self, event):
         self._window_hidden = True
+        if hasattr(self, "_focus_resample_timer"):
+            self._focus_resample_timer.stop()
+        if hasattr(self, "_focus_picker"):
+            self._focus_picker.cancel()
         if self.emergency_hotkey:
             self.emergency_hotkey.unregister()
         if hasattr(self, "toast"):
             self.toast.dismiss()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.dismiss()
         if hasattr(self, "settings_page"):
             self.settings_page.cancel_active_capture()
         super().hideEvent(event)
@@ -2352,11 +2532,18 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self._update_window_controls()
+            was_minimized = bool(event.oldState() & Qt.WindowState.WindowMinimized)
+            if was_minimized and not self.isMinimized() and self.focus_mode:
+                self._schedule_auto_focus_resample(140)
 
     def moveEvent(self, event):
         super().moveEvent(event)
         if hasattr(self, "save_timer"):
             self.schedule_save()
+        if self.focus_mode:
+            self._focus_geometry_dirty = True
+            if not self._focus_adjust_active:
+                self._schedule_auto_focus_resample(160)
 
     def _focus_adjust_key(self):
         return {
@@ -2405,12 +2592,16 @@ class MainWindow(QMainWindow):
         self._focus_adjust_drag = None
         self._focus_system_drag_active = False
         if active:
+            self._focus_resample_timer.stop()
             QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
             self._focus_cursor_override = True
         elif self._focus_cursor_override:
             QApplication.restoreOverrideCursor()
             self._focus_cursor_override = False
         self._apply_window_style()
+        if not active and self.focus_mode and self._focus_geometry_dirty:
+            self._focus_geometry_dirty = False
+            self._schedule_auto_focus_resample(90)
 
     def _update_focus_adjust_cursor(self, global_position):
         if not self._focus_cursor_override:
@@ -2576,10 +2767,16 @@ class MainWindow(QMainWindow):
             app.removeEventFilter(self)
         self.save_state()
         self.save_timer.stop()
+        if hasattr(self, "_focus_resample_timer"):
+            self._focus_resample_timer.stop()
+        if hasattr(self, "_focus_picker"):
+            self._focus_picker.cancel()
         if hasattr(self, "toast"):
             self.toast.dismiss()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
+        if hasattr(self, "focus_popover"):
+            self.focus_popover.dismiss()
         if hasattr(self, "settings_page"):
             self.settings_page.cancel_active_capture()
         self.closed = True

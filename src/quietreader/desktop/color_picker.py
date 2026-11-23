@@ -1,4 +1,5 @@
 """User-initiated, in-memory screen sampling. Images are never saved or sent."""
+from collections import Counter
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal
@@ -32,6 +33,114 @@ def capture_screens():
     if not samples:
         raise RuntimeError("no screens")
     return samples
+
+
+def capture_region(bounds: QRect) -> list[ScreenSample]:
+    """Capture only the intersecting screen region needed around a window."""
+    if not bounds.isValid() or bounds.isEmpty():
+        return []
+    samples = []
+    for screen in QGuiApplication.screens():
+        screen_rect = screen.geometry()
+        clip = bounds.intersected(screen_rect)
+        if clip.isEmpty():
+            continue
+        image = screen.grabWindow(
+            0,
+            clip.left() - screen_rect.left(),
+            clip.top() - screen_rect.top(),
+            clip.width(),
+            clip.height(),
+        ).toImage()
+        if not image.isNull():
+            samples.append(ScreenSample(image, clip))
+    return samples
+
+
+def extract_perimeter_color(
+    samples: list[ScreenSample],
+    window_rect: QRect,
+    gap: int = 3,
+    band: int = 3,
+) -> QColor:
+    """Estimate the dominant host background color from pixels strictly outside window_rect."""
+    if not samples or not window_rect.isValid() or window_rect.width() < 20 or window_rect.height() < 20:
+        return QColor()
+    gap = max(1, int(gap))
+    band = max(1, int(band))
+    inset = min(10, max(0, min(window_rect.width(), window_rect.height()) // 6))
+    x_start = window_rect.left() + inset
+    x_end = window_rect.right() - inset
+    y_start = window_rect.top() + inset
+    y_end = window_rect.bottom() - inset
+    if x_end < x_start or y_end < y_start:
+        return QColor()
+
+    x_step = max(2, window_rect.width() // 72)
+    y_step = max(2, window_rect.height() // 72)
+
+    points: list[QPoint] = []
+    for offset in range(gap, gap + band):
+        top_y = window_rect.top() - offset
+        bottom_y = window_rect.bottom() + offset
+        for x in range(x_start, x_end + 1, x_step):
+            points.append(QPoint(x, top_y))
+            points.append(QPoint(x, bottom_y))
+        left_x = window_rect.left() - offset
+        right_x = window_rect.right() + offset
+        for y in range(y_start, y_end + 1, y_step):
+            points.append(QPoint(left_x, y))
+            points.append(QPoint(right_x, y))
+
+    rgb_values: list[tuple[int, int, int]] = []
+    for pt in points:
+        for sample in samples:
+            if sample.geometry.contains(pt):
+                color = sample.color_at(pt)
+                if color.isValid():
+                    rgb_values.append((color.red(), color.green(), color.blue()))
+                break
+
+    if not rgb_values:
+        return QColor()
+
+    # Quantize to 8-step RGB buckets to find the dominant solid host surface,
+    # then take the per-channel median across the peak cluster (ignoring text/border outliers).
+    buckets = Counter((r >> 3, g >> 3, b >> 3) for r, g, b in rgb_values)
+    peak_r, peak_g, peak_b = buckets.most_common(1)[0][0]
+    inliers = [
+        (r, g, b)
+        for r, g, b in rgb_values
+        if max(abs((r >> 3) - peak_r), abs((g >> 3) - peak_g), abs((b >> 3) - peak_b)) <= 1
+    ]
+    if not inliers:
+        inliers = rgb_values
+
+    mid = len(inliers) // 2
+    red = sorted(px[0] for px in inliers)[mid]
+    green = sorted(px[1] for px in inliers)[mid]
+    blue = sorted(px[2] for px in inliers)[mid]
+    return QColor(red, green, blue)
+
+
+def sample_window_perimeter_color(
+    window_rect: QRect,
+    capture=None,
+    gap: int = 3,
+    band: int = 3,
+) -> QColor:
+    """Capture pixels strictly outside window_rect without hiding the window and estimate background color."""
+    if not window_rect.isValid() or window_rect.width() < 20 or window_rect.height() < 20:
+        return QColor()
+    outer = max(1, int(gap)) + max(1, int(band))
+    expanded = window_rect.adjusted(-outer, -outer, outer, outer)
+    try:
+        samples = capture(expanded) if callable(capture) else capture_region(expanded)
+    except Exception:
+        return QColor()
+    if not samples:
+        return QColor()
+    return extract_perimeter_color(samples, window_rect, gap=gap, band=band)
 
 
 class ColorOverlay(QWidget):

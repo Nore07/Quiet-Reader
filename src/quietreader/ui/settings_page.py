@@ -16,7 +16,9 @@ from quietreader.domain.models import Settings
 from quietreader.i18n import tr
 from quietreader.keys import BINDING_FIELDS, binding_error
 from quietreader.ui.appearance_popover import _SliderControl, _ThemeCard
-from quietreader.ui.controls import QuietComboBox, SegmentedControl, ThinSlider, ToggleSwitch
+from quietreader.ui.controls import (
+    ColorSwatchChip, QuietComboBox, SegmentedControl, ThinSlider, ToggleSwitch,
+)
 from quietreader.ui.icons import render_icon_pixmap
 from quietreader.ui.key_capture import KeyBindingButton
 from quietreader.ui.settings import GLOBAL_HOTKEY_DESCRIPTION, _PreferencesWheelFilter
@@ -106,71 +108,7 @@ class _SettingsNavButton(QAbstractButton):
         painter.end()
 
 
-class _ColorSwatchChip(QAbstractButton):
-    """Clickable pill displaying a rounded color swatch next to its hex value or auto label."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._hex_color = ""
-        self._fallback_color = "#f6f4ec"
-        self._label = ""
-        self._hovered = False
-        self._palette = resolve_palette("light")
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(28)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-    def set_color(self, hex_color: str, fallback_color: str, label: str):
-        self._hex_color = hex_color
-        self._fallback_color = fallback_color
-        self._label = label
-        self.updateGeometry()
-        self.update()
-
-    def apply_palette(self, palette: dict[str, str]):
-        self._palette = dict(palette)
-        self.update()
-
-    def sizeHint(self) -> QSize:
-        font = QFont(self.font())
-        font.setPixelSize(12)
-        fm = QFontMetrics(font)
-        return QSize(max(92, 34 + fm.horizontalAdvance(self._label) + 12), 28)
-
-    def enterEvent(self, event):
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
-        bg = self._palette["accent_hover"] if self._hovered else self._palette["side"]
-        border = self._palette["line_strong"] if self._hovered else self._palette["line"]
-        painter.setPen(QPen(QColor(border), 1.0))
-        painter.setBrush(QColor(bg))
-        painter.drawRoundedRect(rect, 7.0, 7.0)
-
-        swatch_color = QColor(self._hex_color or self._fallback_color)
-        swatch_rect = QRectF(8.0, (self.height() - 14.0) / 2.0, 14.0, 14.0)
-        painter.setPen(QPen(QColor(self._palette["line_strong"]), 1.0))
-        painter.setBrush(swatch_color)
-        painter.drawRoundedRect(swatch_rect, 4.0, 4.0)
-
-        font = QFont(self.font())
-        font.setPixelSize(11.5)
-        painter.setFont(font)
-        painter.setPen(QColor(self._palette["ink"] if self._hex_color else self._palette["muted"]))
-        text_rect = QRect(28, 0, max(20, self.width() - 34), self.height())
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
-        painter.end()
+_ColorSwatchChip = ColorSwatchChip
 
 
 class SettingsPage(QWidget):
@@ -494,8 +432,29 @@ class SettingsPage(QWidget):
         _, _, title_src, desc_src = _SECTION_SPECS[2]
         page, layout = self._make_section_page("focus", title_src, desc_src)
 
-        # Card 1: Focus appearance (bg color, text color, opacity)
+        # Card 1: Focus appearance & auto-blend
         card1, c1 = self._make_card(page)
+
+        auto_bg_toggle = ToggleSwitch(False, card1)
+        auto_bg_toggle.toggled.connect(lambda checked: self._on_toggle_changed("focus_auto_background", checked))
+        self.toggles["focus_auto_background"] = auto_bg_toggle
+        self._themed_widgets.append(auto_bg_toggle)
+        self._add_card_row(
+            c1, "自动适配窗口周边背景色",
+            "进入专注或拖动调整后自动采样窗口外沿主色，避免切窗时反复手动取色（无后台持续录屏）",
+            auto_bg_toggle, responsive=False,
+        )
+
+        self.sample_trigger_control = SegmentedControl(card1)
+        for key, label in (("auto", "进专注与移动后"), ("manual", "仅手动快捷键")):
+            seg_btn = self.sample_trigger_control.add_segment(key, label)
+            self._translatable_buttons.append((seg_btn, label))
+        self.sample_trigger_control.currentChanged.connect(self._on_sample_trigger_changed)
+        self._add_card_row(
+            c1, "采样触发方式",
+            "可随时按快捷键重采，也可随时关闭切回手动固定色",
+            self.sample_trigger_control, responsive=True, add_divider_before=True,
+        )
 
         bg_controls = QWidget(card1)
         bg_outer = QBoxLayout(QBoxLayout.Direction.LeftToRight, bg_controls)
@@ -530,8 +489,8 @@ class SettingsPage(QWidget):
         self._responsive_control_groups.append(bg_outer)
         self._add_card_row(
             c1, "专注模式背景色",
-            "仅在专注模式生效；取色时窗口暂时隐藏，结果仅保存在本机",
-            bg_controls, responsive=True,
+            "关闭自动适配时生效；取色时窗口暂时隐藏，结果仅保存在本机",
+            bg_controls, responsive=True, add_divider_before=True,
         )
 
         text_controls = QWidget(card1)
@@ -642,6 +601,7 @@ class SettingsPage(QWidget):
             (
                 ("focus_key", "切换专注模式"),
                 ("focus_opacity_key", "切换专注模式透明度"),
+                ("focus_resample_key", "重新采样专注背景色"),
                 ("hotkey", "显示 / 隐藏快捷键"),
                 ("emergency_key", "紧急退出快捷键"),
             ),
@@ -802,6 +762,7 @@ class SettingsPage(QWidget):
         self.opacity_slider.setValue(pct)
         self.opacity_value.setText(f"{pct}%")
         self.adjust_key_control.set_current(settings.focus_adjust_key, emit=False)
+        self.sample_trigger_control.set_current(settings.focus_sample_trigger, emit=False)
         for key, sw in self.toggles.items():
             sw.setChecked(bool(getattr(settings, key)))
 
@@ -865,6 +826,8 @@ class SettingsPage(QWidget):
         elif sec == "focus":
             updated = replace(
                 self._settings,
+                focus_auto_background=defaults.focus_auto_background,
+                focus_sample_trigger=defaults.focus_sample_trigger,
                 background_color=defaults.background_color,
                 text_color=defaults.text_color,
                 opacity=defaults.opacity,
@@ -1010,6 +973,11 @@ class SettingsPage(QWidget):
         if self._syncing:
             return
         self._commit(replace(self._settings, focus_adjust_key=key))
+
+    def _on_sample_trigger_changed(self, key: str):
+        if self._syncing or key not in ("auto", "manual"):
+            return
+        self._commit(replace(self._settings, focus_sample_trigger=key))
 
     def _on_toggle_changed(self, field: str, checked: bool):
         if self._syncing:

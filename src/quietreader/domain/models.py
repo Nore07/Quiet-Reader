@@ -105,8 +105,11 @@ class Settings:
     previous_chapter_key: str = "Ctrl+PgUp"
     focus_key: str = "F10"
     focus_opacity_key: str = "F9"
+    focus_resample_key: str = "F8"
     focus_adjust_key: str = "Alt"
     auto_check_updates: bool = False
+    focus_auto_background: bool = False
+    focus_sample_trigger: str = "auto"
 
     @classmethod
     def from_dict(cls, raw):
@@ -123,7 +126,7 @@ class Settings:
                     setattr(result, key, convert(max(low, min(high, value))))
             except (ValueError, TypeError, OverflowError):
                 pass
-        for key in ["always_on_top", "close_to_tray", "global_hotkey", "auto_check_updates"]:
+        for key in ["always_on_top", "close_to_tray", "global_hotkey", "auto_check_updates", "focus_auto_background"]:
             if type(raw.get(key)) is bool:
                 setattr(result, key, raw[key])
         if raw.get("theme") in ("system", "light", "dark", "sepia"):
@@ -138,6 +141,8 @@ class Settings:
             result.language = raw["language"]
         if raw.get("focus_adjust_key") in ("Alt", "Ctrl", "Shift"):
             result.focus_adjust_key = raw["focus_adjust_key"]
+        if raw.get("focus_sample_trigger") in ("auto", "manual"):
+            result.focus_sample_trigger = raw["focus_sample_trigger"]
         if isinstance(raw.get("font_family"), str) and 0 < len(raw["font_family"]) <= 100:
             result.font_family = raw["font_family"]
         bindings = {key: normalize_binding(raw.get(key, getattr(result, key))) for key in BINDING_FIELDS}
@@ -147,6 +152,12 @@ class Settings:
             used = {value for key, value in bindings.items() if key != "focus_opacity_key"}
             candidates = [f"F{number}" for number in (*range(9, 25), *range(8, 0, -1))]
             bindings["focus_opacity_key"] = next((candidate for candidate in candidates if candidate not in used), "F9")
+        if "focus_resample_key" not in raw or not bindings["focus_resample_key"] or bindings["focus_resample_key"] in {
+            value for key, value in bindings.items() if key != "focus_resample_key"
+        }:
+            used = {value for key, value in bindings.items() if key != "focus_resample_key"}
+            candidates = [f"F{number}" for number in (*range(8, 0, -1), *range(11, 25), 9, 10)]
+            bindings["focus_resample_key"] = next((candidate for candidate in candidates if candidate not in used), "F8")
         if "emergency_key" not in raw:
             used = {value for key, value in bindings.items() if key != "emergency_key"}
             bindings["emergency_key"] = next(key for key in ("Ctrl+Alt+Q", "Ctrl+Shift+Q", "Ctrl+Alt+Shift+Q", "Ctrl+Alt+F9", "Ctrl+Alt+F8") if key not in used)

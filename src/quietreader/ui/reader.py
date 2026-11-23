@@ -28,6 +28,7 @@ class PageView(QWidget):
     chapter_turned = Signal(int)
     exit_focus = Signal()
     focus_requested = Signal()
+    resample_requested = Signal()
     visibility_requested = Signal()
     emergency_requested = Signal()
 
@@ -35,6 +36,7 @@ class PageView(QWidget):
         super().__init__(parent)
         self.settings = Settings()
         self.focus_mode = False
+        self.focus_background_override = ""
         self.text = ""
         self.images = {}
         self.image_sizes = {}
@@ -86,6 +88,11 @@ class PageView(QWidget):
         self.selection = QTextCursor(self.document)
         self.reflow()
 
+    def _active_focus_background(self) -> str:
+        if not self.focus_mode:
+            return ""
+        return self.focus_background_override or self.settings.background_color
+
     def apply_settings(self, settings):
         self.settings = settings
         self.reflow()
@@ -121,7 +128,7 @@ class PageView(QWidget):
             image_block.setAlignment(Qt.AlignmentFlag.AlignHCenter)
             cursor.mergeBlockFormat(image_block)
             self.image_sizes[position] = scaled
-        c = colors(self.settings.theme, self.settings.background_color if self.focus_mode else "")
+        c = colors(self.settings.theme, self._active_focus_background())
         if self.settings.text_color:
             c["ink"] = self.settings.text_color
         heading_scale = {"1": 1.8, "2": 1.55, "3": 1.35, "4": 1.2, "5": 1.1, "6": 1.0}
@@ -219,7 +226,7 @@ class PageView(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        c = colors(self.settings.theme, self.settings.background_color if self.focus_mode else "")
+        c = colors(self.settings.theme, self._active_focus_background())
         if self.settings.text_color:
             c["ink"] = self.settings.text_color
         painter.setPen(QColor(c["ink"]))
@@ -282,6 +289,7 @@ class PageView(QWidget):
         action = menu.addAction(tr("复制选中文字", self.settings.language), self.copy)
         action.setEnabled(self.selection.hasSelection())
         if self.focus_mode:
+            menu.addAction(tr("重新采样背景色", self.settings.language), self.resample_requested.emit)
             menu.addAction(tr("退出专注模式", self.settings.language), self.exit_focus.emit)
         menu.exec(event.globalPos())
 
@@ -301,6 +309,9 @@ class PageView(QWidget):
         elif sequence == self.settings.focus_key:
             if not event.isAutoRepeat():
                 self.focus_requested.emit()
+        elif sequence == self.settings.focus_resample_key:
+            if not event.isAutoRepeat():
+                self.resample_requested.emit()
         elif event.matches(QKeySequence.StandardKey.Copy):
             self.copy()
         elif sequence == self.settings.next_key:

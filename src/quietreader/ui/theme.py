@@ -152,8 +152,31 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         border: none;
     }}
     QLabel#popoverHeading {{ font-size: 13.5px; font-weight: 600; color: {c['ink']}; }}
+    QLabel#popoverBadge {{
+        font-size: 10.5px;
+        font-weight: 600;
+        color: {c['muted']};
+        background: {c['side']};
+        border: 1px solid {c['line']};
+        border-radius: 5px;
+        padding: 1px 6px;
+    }}
     QLabel#popoverLabel {{ font-size: 11.5px; font-weight: 500; color: {c['muted']}; }}
     QLabel#popoverValue {{ font-size: 11.5px; font-weight: 600; color: {c['ink']}; }}
+    QPushButton#popoverActionBtn {{
+        color: {ink_secondary};
+        background: {c['side']};
+        border: 1px solid {c['line']};
+        border-radius: 6px;
+        padding: 4px 7px;
+        min-height: 20px;
+        font-size: 11.5px;
+    }}
+    QPushButton#popoverActionBtn:hover {{
+        color: {c['ink']};
+        background: {accent_hover};
+        border-color: {line_strong};
+    }}
     QFrame#popoverDivider {{ background: {c['line']}; border: none; }}
     QPushButton#stepperButton {{
         color: {c['ink']};
