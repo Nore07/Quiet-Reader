@@ -84,6 +84,7 @@ def initial_state():
         "bookmarks": {},
         "last_book": "",
         "last_browse_dir": "",
+        "last_update_check": 0,
         "window": [100, 100, 1000, 760],
     }
 
@@ -125,6 +126,9 @@ class StateStore:
                 browse_dir = value.get("last_browse_dir", "")
                 if isinstance(browse_dir, str) and "\x00" not in browse_dir and len(browse_dir) <= 4096:
                     clean["last_browse_dir"] = browse_dir
+                last_update_check = value.get("last_update_check")
+                if type(last_update_check) is int and last_update_check >= 0:
+                    clean["last_update_check"] = last_update_check
                 bounds = value.get("window")
                 if isinstance(bounds, list) and len(bounds) == 4 and all(type(v) is int and abs(v) < 100000 for v in bounds):
                     clean["window"] = bounds

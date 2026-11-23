@@ -131,6 +131,31 @@ class ShelfManager:
             raise ShelfError(f"无法创建分类：{_filesystem_detail(error)}") from None
         return path
 
+    def rename_category(self, name, new_name):
+        """Rename a category directory and return its books' old and new paths."""
+        if name == UNCLASSIFIED:
+            raise ShelfError("未分类文件夹不能重命名。")
+        new_name = self.validate_category_name(new_name)
+        source = self.category_path(name).resolve()
+        if source.name == new_name:
+            return source, source, {}
+        destination = source.with_name(new_name)
+        try:
+            if any(entry.name != source.name and entry.name.casefold() == new_name.casefold()
+                   for entry in self.root.iterdir()):
+                raise ShelfError("这个分类已经存在。")
+            paths = {
+                entry: destination / entry.name
+                for entry in source.iterdir()
+                if entry.suffix.lower() in SUPPORTED_SUFFIXES and not entry.is_symlink() and entry.is_file()
+            }
+            source.rename(destination)
+        except FileExistsError:
+            raise ShelfError("这个分类已经存在。") from None
+        except OSError as error:
+            raise ShelfError(f"无法重命名分类：{_filesystem_detail(error)}") from None
+        return source, destination, paths
+
     @staticmethod
     def _unique_path(directory, filename):
         candidate = directory / filename

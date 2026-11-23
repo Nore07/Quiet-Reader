@@ -600,6 +600,7 @@ class ShelfPanel(QWidget):
     move_books_requested = Signal(list, str)
     remove_requested = Signal(str)
     create_category_requested = Signal()
+    rename_category_requested = Signal(str)
     delete_category_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -653,11 +654,17 @@ class ShelfPanel(QWidget):
         self.category_create = IconButton("plus", size=13, object_name="iconButton", parent=self.rail)
         self.category_create.setFixedSize(22, 22)
         self.category_create.clicked.connect(self.create_category_requested.emit)
+        self.category_rename = QPushButton(self.rail)
+        self.category_rename.setObjectName("railRenameBtn")
+        self.category_rename.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.category_rename.setFixedHeight(22)
+        self.category_rename.clicked.connect(self._rename_selected_category)
         self.category_delete = QPushButton(self.rail)
         self.category_delete.setObjectName("railDeleteBtn")
         self.category_delete.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.category_delete.setFixedHeight(22)
         self.category_delete.clicked.connect(self._delete_selected_category)
+        cat_header.addWidget(self.category_rename)
         cat_header.addWidget(self.category_delete)
         cat_header.addWidget(self.category_create)
         rail_layout.addLayout(cat_header)
@@ -840,6 +847,9 @@ class ShelfPanel(QWidget):
         self.cat_section_label.setText(tr("分类", language))
         self.category_create.setToolTip(tr("新建分类", language))
         self.category_create.setAccessibleName(tr("新建分类", language))
+        self.category_rename.setText(tr("改名", language))
+        self.category_rename.setToolTip(tr("重命名分类", language))
+        self.category_rename.setAccessibleName(tr("重命名分类", language))
         self.category_delete.setText(tr("删除", language))
         self.category_delete.setToolTip(tr("删除分类", language))
         self.category_delete.setAccessibleName(tr("删除分类", language))
@@ -904,7 +914,7 @@ class ShelfPanel(QWidget):
                     break
         self._refresh_rail_icons()
         self._sync_narrow_scope_selection()
-        self._update_delete_category_state()
+        self._update_category_actions()
         self._syncing_scope = False
         self._populate_book_view()
 
@@ -945,14 +955,15 @@ class ShelfPanel(QWidget):
                 self.narrow_scope.setCurrentIndex(idx)
                 return
 
-    def _update_delete_category_state(self):
-        can_delete = (
+    def _update_category_actions(self):
+        can_edit = (
             self._scope_kind == "category"
             and self._active_category != UNCLASSIFIED
             and self._active_category in self.categories
         )
-        self.category_delete.setVisible(can_delete)
-        self.category_delete.setEnabled(can_delete)
+        for button in (self.category_rename, self.category_delete):
+            button.setVisible(can_edit)
+            button.setEnabled(can_edit)
 
     def _category_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {UNCLASSIFIED: 0}
@@ -1003,7 +1014,7 @@ class ShelfPanel(QWidget):
             self.category_list.setCurrentRow(-1)
 
         self._sync_narrow_scope_selection()
-        self._update_delete_category_state()
+        self._update_category_actions()
         self._refresh_rail_icons()
         self._syncing_scope = False
         self._populate_book_view()
@@ -1160,6 +1171,10 @@ class ShelfPanel(QWidget):
             self.move_books_requested.emit(targets, move_actions[selected_action])
         elif selected_action == remove_action:
             self.remove_requested.emit(book_id)
+
+    def _rename_selected_category(self):
+        if self._scope_kind == "category" and self._active_category in self.categories:
+            self.rename_category_requested.emit(self._active_category)
 
     def _delete_selected_category(self):
         if self._scope_kind == "category" and self._active_category != UNCLASSIFIED:

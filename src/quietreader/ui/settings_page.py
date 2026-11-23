@@ -2,14 +2,15 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QEvent, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QEvent, QRect, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QBoxLayout, QColorDialog, QFontComboBox, QFrame, QGridLayout,
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
+from quietreader import __version__
 from quietreader.desktop.color_picker import DesktopColorPicker
 from quietreader.domain.models import Settings
 from quietreader.i18n import tr
@@ -20,6 +21,7 @@ from quietreader.ui.icons import render_icon_pixmap
 from quietreader.ui.key_capture import KeyBindingButton
 from quietreader.ui.settings import GLOBAL_HOTKEY_DESCRIPTION, _PreferencesWheelFilter
 from quietreader.ui.tokens import resolve_palette
+from quietreader.updates import PROJECT_URL, RELEASES_URL
 
 
 _SECTION_SPECS = (
@@ -27,7 +29,8 @@ _SECTION_SPECS = (
     ("reading", "typography", "阅读与排版", "自定义正文字体、字号、行距与页边距，打造舒适版面。"),
     ("focus", "focus", "专注与窗口", "配置专注模式背景、透明度与窗口置顶、托盘等桌面行为。"),
     ("shortcuts", "keyboard", "快捷键", "点击按键即可重新录入；Esc、Ctrl+O、Ctrl+, 与 Ctrl+C 为系统保留键。"),
-    ("storage", "storage", "数据与存储", "所有书籍、阅读进度与配置均仅保存在本地数据目录，完全离线。"),
+    ("storage", "storage", "数据与存储", "书籍、阅读进度和配置均保存在本地数据目录。"),
+    ("about", "info", "关于", "查看 QuietReader 的版本和项目链接。"),
 )
 _SETTINGS_RAIL_MIN_WIDTH = 720
 _CARD_HORIZONTAL_PADDING = 16
@@ -178,6 +181,7 @@ class SettingsPage(QWidget):
     capture_finished = Signal()
     notice_requested = Signal(str)
     close_requested = Signal()
+    check_update_requested = Signal()
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -271,6 +275,7 @@ class SettingsPage(QWidget):
         self._build_focus_section()
         self._build_shortcuts_section()
         self._build_storage_section()
+        self._build_about_section()
         host_layout.addWidget(self.section_stack, 1)
         self.scroll.setWidget(self.scroll_host)
         self.scroll.viewport().installEventFilter(self)
@@ -688,6 +693,68 @@ class SettingsPage(QWidget):
         layout.addWidget(card)
         layout.addStretch(1)
 
+    def _build_about_section(self):
+        _, _, title, description = _SECTION_SPECS[5]
+        page, layout = self._make_section_page("about", title, description)
+        card, rows = self._make_card(page)
+        version = QLabel(__version__, card)
+        version.setObjectName("popoverValue")
+        self._add_card_row(rows, "当前版本", "", version, responsive=False)
+
+        toggle = ToggleSwitch(False, card)
+        toggle.toggled.connect(lambda checked: self._on_toggle_changed("auto_check_updates", checked))
+        self.toggles["auto_check_updates"] = toggle
+        self._themed_widgets.append(toggle)
+        self._add_card_row(rows, "自动检查更新", "开启后，启动时向 GitHub 查询公开版本，每天最多一次。",
+                           toggle, add_divider_before=True)
+        self.check_update_button = self._tr_button("检查更新", self.check_update_requested.emit, "settingsBtn")
+        self._add_card_row(rows, "版本状态", "", self.check_update_button, add_divider_before=True)
+        self.update_status_label = QLabel(card)
+        self.update_status_label.setObjectName("settingsRowSub")
+        self.update_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.update_status_label.setWordWrap(True)
+        rows.addWidget(self.update_status_label)
+        self.release_button = self._tr_button("查看更新", self.open_update_release, "settingsBtn")
+        rows.addWidget(self.release_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.set_update_status("idle")
+        layout.addWidget(card)
+
+        card, rows = self._make_card(page)
+        rows.addWidget(self._tr_label("GitHub", "settingsRowTitle"))
+        for label, url in (
+            ("项目主页", PROJECT_URL),
+            ("反馈问题", f"{PROJECT_URL}/issues"),
+            ("发布记录", RELEASES_URL),
+        ):
+            button = self._tr_button(label, lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link)), "settingsBtn")
+            rows.addWidget(button, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+    def set_update_status(self, status, release=None):
+        self._update_status = status
+        self._release_result = release
+        self._refresh_update_status()
+
+    def _refresh_update_status(self):
+        messages = {
+            "idle": "尚未检查更新。",
+            "checking": "正在检查更新…",
+            "available": "发现新版本 {version}。",
+            "current": "当前已是最新公开版本。",
+            "ahead": "当前版本高于公开发布版 {version}。",
+            "error": "暂时无法检查更新，请稍后重试。",
+        }
+        release = self._release_result
+        self.update_status_label.setText(tr(messages[self._update_status], self.language,
+                                            version=release.version if release else ""))
+        self.check_update_button.setEnabled(self._update_status != "checking")
+        self.release_button.setVisible(self._update_status == "available")
+
+    def open_update_release(self):
+        if self._update_status == "available" and self._release_result is not None:
+            QDesktopServices.openUrl(QUrl(self._release_result.url))
+
     # ---- Public API ----
 
     def select_section(self, key: str):
@@ -769,6 +836,7 @@ class SettingsPage(QWidget):
             btn.refresh()
         self._refresh_color_swatches()
         self._refresh_storage_info()
+        self._refresh_update_status()
         self._update_responsive_rows()
 
     def cancel_active_capture(self):
@@ -805,6 +873,8 @@ class SettingsPage(QWidget):
                 global_hotkey=defaults.global_hotkey,
                 **{key: getattr(defaults, key) for key in BINDING_FIELDS},
             )
+        elif sec == "about":
+            updated = replace(self._settings, auto_check_updates=defaults.auto_check_updates)
         else:
             return
         self._commit(updated)

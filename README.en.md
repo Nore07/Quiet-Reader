@@ -8,45 +8,68 @@ QuietReader is an offline-first desktop reader for Windows, built with Python an
 
 ## Screenshots
 
-### Reading view
+### Reading
 
-![QuietReader reading view](docs/screenshots/reading.png)
+![The reading view before a book has been opened](docs/screenshots/reader-empty.png)
 
-**Read locally:** Browse the table of contents, bookmarks, and book details in the sidebar; read chapter text and embedded EPUB illustrations; and turn pages with the controls below.
+Press `Ctrl+O` to choose a local TXT or EPUB file, or drag a file into the window. After importing, open the book from the bookshelf.
+
+![An open EPUB with the table of contents on the left and chapter and book progress at the bottom](docs/screenshots/reader-open.png)
+
+Use the sidebar to switch between contents, bookmarks, and book info. Click the sidebar button in the top bar to collapse it. The progress bar at the bottom lets you seek within the current chapter. Whole-book progress appears to the right of the page controls. Reopening a book restores your last reading position.
 
 ### Focus mode
 
-![Focus mode blending into a sampled desktop color](docs/screenshots/focus1.png)
+| Blend with the background | Hold `Alt` to adjust the window |
+| --- | --- |
+| ![Book text blending into a sampled dark background in Focus mode](docs/screenshots/focus-blend.png) | ![Dashed outline around the Focus mode window while Alt is held](docs/screenshots/focus-adjust.png) |
 
-**Blend with the desktop:** Sample the color you want to blend into with the desktop color picker in Configuration, then enter Focus mode to make the reader blend into the desktop.
-
-![Hold Alt to show the window outline and move or resize it](docs/screenshots/focus2.png)
-
-**Hold Alt to adjust the window:** In Focus mode, hold `Alt` to show the window outline, then drag or resize the window. Release the key to return to reading with only the text visible.
+Use the desktop color picker under **Configuration → Focus & window** to sample a background color. You can also set the background opacity and text color there. Press `F10` to enter Focus mode and hide the reader controls. Hold the default adjustment key, `Alt`, to drag the window or resize it from an edge. Release the key to hide the outline, or press `Esc` to return to the regular reading view.
 
 ### Bookshelf
 
-![Recently read books](docs/screenshots/bookshelf1.png)
+![Bookshelf cover grid with Recently read, All books, and custom categories on the left](docs/screenshots/bookshelf.png)
 
-**Recent books:** Continue a recently opened book and return to your saved reading position.
+Use the left pane to browse recently read books, all books, or a category. Search by title or author, sort by last read, title, or reading progress, and switch between the cover grid and list views. Import books with **Add books** or by dragging local files into the window. Drag selected books onto a category to move them, or use a book's **···** menu to change its displayed title.
 
-![All books](docs/screenshots/bookshelf2.png)
+### Appearance and layout
 
-**All books:** Browse books in your local library and add new titles from the bookshelf page.
+![Appearance and layout popover opened from the Aa button in the reading toolbar](docs/screenshots/appearance-popover.png)
 
-![Book categories](docs/screenshots/bookshelf3.png)
+Click `Aa` in the reading toolbar to change the theme, font, font size, line height, letter spacing, paragraph spacing, or page padding. Changes take effect immediately. Select **More settings** to open the full configuration page.
 
-**Categories:** Create categories and organize books in your library so they are easier to find.
+### Configuration
 
-### Configuration and layout
+Click the gear or press `Ctrl+,` to open Configuration. Use the left pane to switch between sections. Changes are saved automatically. **Data & storage** shows the current data directory and state file path.
 
-![Configuration page](docs/screenshots/peizhiyemian.png)
+<details>
+<summary>Show configuration screenshots</summary>
 
-**Reader configuration:** Set the interface language, theme, and reading appearance in one place.
+#### Appearance & language
 
-![Live typography preview](docs/screenshots/yuedupeizhi.png)
+![Theme cards and interface language choices in Appearance & language](docs/screenshots/settings-appearance.png)
 
-**Live layout preview:** Change font size, line height, letter spacing, paragraph spacing, or page padding and see the reading area update immediately.
+Choose a reading theme and use the system language, Simplified Chinese, or English for the interface.
+
+#### Reading & layout
+
+![Font selector and typography sliders in Reading & layout](docs/screenshots/settings-typography.png)
+
+Select a font and use the sliders or the plus and minus buttons to fine-tune text size, spacing, and page padding.
+
+#### Focus & window
+
+![Color picker, opacity, window adjustment key, and tray settings in Focus & window](docs/screenshots/settings-focus.png)
+
+Set the Focus mode background and text colors, background opacity, and window adjustment key. This page also includes always-on-top and close-to-tray settings.
+
+#### Shortcuts
+
+![Global shortcut toggle and bindings for paging, chapter navigation, and Focus mode](docs/screenshots/settings-shortcuts.png)
+
+Click a binding to record a new shortcut. With global shortcuts enabled, you can show or hide QuietReader while another app is active. Emergency exit is also available globally while the reader window is visible.
+
+</details>
 
 ## Features
 
@@ -68,7 +91,7 @@ These are the defaults. Shortcuts can be changed in Configuration, except for a 
 | --- | --- |
 | Next / previous page | `PageDown` / `PageUp` |
 | Next / previous chapter | `Ctrl+PageDown` / `Ctrl+PageUp` |
-| Enter or exit Focus mode | `F10` or `Esc` |
+| Toggle Focus mode / exit Focus mode | `F10` / `Esc` |
 | Toggle Focus mode opacity (0% / 100%) | `F9` |
 | Add books / Configuration | `Ctrl+O` / `Ctrl+,` |
 | Show / hide the window | `Ctrl+Alt+R` |
@@ -79,6 +102,14 @@ Enable global shortcuts under Configuration → Shortcuts. While the window is v
 ## Download and run
 
 **Download the app:** [QuietReader 0.1.6 for Windows x64](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip) ([SHA-256 checksum](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip.sha256)) is available on [GitHub Releases](https://github.com/Nore07/Quiet-Reader/releases). The archive does not include personal settings or books. After extraction, run `QuietReader.exe`; it creates a `data\` folder beside the executable. Keep all files in the extracted directory while running the app.
+
+**Use the installer**
+
+Run `QuietReader-Setup-<version>-x64.exe` and follow the wizard. Setup defaults to `%LOCALAPPDATA%\Programs\QuietReader` for the current user, requires no administrator privileges, and offers an optional desktop shortcut.
+
+- **Upgrade in place.** Exit QuietReader, then run the newer installer. If Setup detects an existing installation, it displays the upgrade destination and reuses that directory, keeping the books, bookmarks, reading progress, and settings in `data`.
+- **Change the installation directory.** Back up the entire `data` folder from the old directory, uninstall the old version through Windows **Installed apps**, then install to the new directory. Clear **Launch QuietReader** on the final page, copy the backed-up `data` folder beside the new `QuietReader.exe`, and then open the reader. If you use `--data-dir`, keep that custom directory as well.
+- **Switch from the portable build.** If QuietReader is not already installed, select the folder containing the portable `QuietReader.exe` in the wizard to keep using that folder's `data`.
 
 **Run from source:** Download or clone this repository. Python 3.12 or newer is required. From the repository root in PowerShell:
 

@@ -106,6 +106,7 @@ class Settings:
     focus_key: str = "F10"
     focus_opacity_key: str = "F9"
     focus_adjust_key: str = "Alt"
+    auto_check_updates: bool = False
 
     @classmethod
     def from_dict(cls, raw):
@@ -122,7 +123,7 @@ class Settings:
                     setattr(result, key, convert(max(low, min(high, value))))
             except (ValueError, TypeError, OverflowError):
                 pass
-        for key in ["always_on_top", "close_to_tray", "global_hotkey"]:
+        for key in ["always_on_top", "close_to_tray", "global_hotkey", "auto_check_updates"]:
             if type(raw.get(key)) is bool:
                 setattr(result, key, raw[key])
         if raw.get("theme") in ("system", "light", "dark", "sepia"):

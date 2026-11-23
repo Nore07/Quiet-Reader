@@ -120,6 +120,7 @@ def main():
     app.commitDataRequest.connect(lambda *_: window.save_state())
     window.show()
     QTimer.singleShot(0, window.reveal)
+    QTimer.singleShot(1500, window.check_for_updates_automatically)
     if pending_activation[0]:
         QTimer.singleShot(0, window.reveal)
     QTimer.singleShot(0, lambda: window.add_book_paths([args.file], open_after=True) if args.file else window.restore_last())
