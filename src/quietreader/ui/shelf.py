@@ -733,6 +733,9 @@ class ShelfPanel(QWidget):
         self.book_view.setAccessibleName("所有书籍")
         self.book_view.setWordWrap(False)
         self.book_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Use one list row as the scroll step in both views.
+        self.book_view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.book_view.verticalScrollBar().setSingleStep(BookItemDelegate.LIST_ROW_HEIGHT)
         self.book_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.book_view.setDragEnabled(True)
         self.book_view.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
