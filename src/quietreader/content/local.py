@@ -579,6 +579,38 @@ def _epub_metadata_values(metadata, name):
     return values
 
 
+def _extract_epub_cover(archive, opf, base, metadata) -> bytes:
+    manifest = {e.attrib["id"]: e.attrib for e in opf.iter() if _tag(e) == "item" and "id" in e.attrib}
+    cover_id = next((item["id"] for item in manifest.values() if "cover-image" in item.get("properties", "").split()), "")
+    if not cover_id:
+        cover_id = next((e.get("content", "") for e in metadata.iter() if _tag(e) == "meta" and e.get("name", "").lower() == "cover"), "")
+    cover_item = manifest.get(cover_id)
+    if cover_item and cover_item.get("href"):
+        try:
+            cover_path = _zip_path(base, cover_item["href"])
+            cover_info = archive.getinfo(cover_path)
+            if cover_info.file_size <= 8 * 1024 * 1024:
+                return _validate_image_payload(archive.read(cover_path))
+        except (ImportError, KeyError, OSError, ValueError, ET.ParseError):
+            return b""
+    return b""
+
+
+def read_epub_cover(file: str | Path) -> bytes:
+    """Read only the validated EPUB cover image bytes, or empty bytes if unavailable."""
+    path = Path(file)
+    if path.suffix.lower() != ".epub":
+        return b""
+    try:
+        if not path.is_file() or path.stat().st_size > MAX_FILE:
+            return b""
+        with zipfile.ZipFile(path) as archive:
+            opf, base, metadata = _read_epub_package(archive)
+            return _extract_epub_cover(archive, opf, base, metadata)
+    except Exception:
+        return b""
+
+
 def read_epub_title(file: str | Path) -> str | None:
     """Read only the EPUB package title, without parsing its chapters."""
     path = Path(file)
@@ -617,19 +649,7 @@ def _load_epub(path: Path) -> tuple[str, str, list[Section]]:
             publication_date = next(iter(_epub_metadata_values(metadata, "date")), "")[:100]
             description = next(iter(_epub_metadata_values(metadata, "description")), "")[:4000]
             manifest = {e.attrib["id"]: e.attrib for e in opf.iter() if _tag(e) == "item" and "id" in e.attrib}
-            cover_id = next((item["id"] for item in manifest.values() if "cover-image" in item.get("properties", "").split()), "")
-            if not cover_id:
-                cover_id = next((e.get("content", "") for e in metadata.iter() if _tag(e) == "meta" and e.get("name", "").lower() == "cover"), "")
-            cover = b""
-            cover_item = manifest.get(cover_id)
-            if cover_item and cover_item.get("href"):
-                try:
-                    cover_path = _zip_path(base, cover_item["href"])
-                    cover_info = archive.getinfo(cover_path)
-                    if cover_info.file_size <= 8 * 1024 * 1024:
-                        cover = _validate_image_payload(archive.read(cover_path))
-                except (ImportError, KeyError, OSError, ValueError, ET.ParseError):
-                    cover = b""
+            cover = _extract_epub_cover(archive, opf, base, metadata)
             navigation = {"toc": [], "page_list": [], "landmarks": []}
             for item in manifest.values():
                 media_type = item.get("media-type")

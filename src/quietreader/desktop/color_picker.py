@@ -41,7 +41,15 @@ class ColorOverlay(QWidget):
     def __init__(self, sample, parent):
         super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.sample = sample
-        self.language = parent.language.currentData() if hasattr(parent, "language") else "system"
+        lang_attr = getattr(parent, "language", "system")
+        if callable(getattr(lang_attr, "currentData", None)):
+            self.language = lang_attr.currentData()
+        elif callable(getattr(lang_attr, "current_key", None)):
+            self.language = lang_attr.current_key()
+        elif isinstance(lang_attr, str):
+            self.language = lang_attr
+        else:
+            self.language = "system"
         self.point = QPoint(20, 20)
         self.setGeometry(sample.geometry)
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -104,7 +112,12 @@ class DesktopColorPicker(QObject):
         self.windows = []
         parent = self.owner.parentWidget()
         # Opacity hides the windows visually without ending a modal QDialog.exec().
-        for window in ([parent.window()] if parent else []) + [self.owner]:
+        # Deduplicate top-level windows so embedded widgets (e.g. SettingsPage) only hide MainWindow once.
+        targets = []
+        for candidate in ([parent.window()] if parent else []) + [self.owner.window()]:
+            if candidate is not None and candidate not in targets:
+                targets.append(candidate)
+        for window in targets:
             self.windows.append((window, window.windowOpacity()))
             window.setWindowOpacity(0)
         self.timer.start()
@@ -143,8 +156,10 @@ class DesktopColorPicker(QObject):
         for window, opacity in self.windows:
             window.setWindowOpacity(opacity)
         self.windows.clear()
-        self.owner.activateWindow()
-        self.owner.raise_()
+        owner_window = self.owner.window()
+        if owner_window is not None:
+            owner_window.activateWindow()
+            owner_window.raise_()
         if color is not None and color.isValid():
             self.selected.emit(color)
 

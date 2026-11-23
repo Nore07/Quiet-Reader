@@ -36,6 +36,7 @@ class KeyCaptureDialog(QDialog):
 class KeyBindingButton(QPushButton):
     capture_started = Signal()
     capture_finished = Signal()
+    sequence_changed = Signal(str)
 
     def __init__(self, sequence, language, parent=None):
         super().__init__(parent)
@@ -56,6 +57,7 @@ class KeyBindingButton(QPushButton):
             dialog = KeyCaptureDialog(self.language, self)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.set_sequence(dialog.sequence)
+                self.sequence_changed.emit(dialog.sequence)
             dialog.deleteLater()
         finally:
             self.capture_finished.emit()
