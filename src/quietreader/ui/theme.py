@@ -147,6 +147,10 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         border: 1px solid {line_strong};
         border-radius: 12px;
     }}
+    QScrollArea#appearanceScroll, QWidget#appearanceViewport, QWidget#appearanceContent {{
+        background: {elevated};
+        border: none;
+    }}
     QLabel#popoverHeading {{ font-size: 13.5px; font-weight: 600; color: {c['ink']}; }}
     QLabel#popoverLabel {{ font-size: 11.5px; font-weight: 500; color: {c['muted']}; }}
     QLabel#popoverValue {{ font-size: 11.5px; font-weight: 600; color: {c['ink']}; }}

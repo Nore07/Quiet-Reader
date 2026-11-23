@@ -74,7 +74,7 @@ These are the defaults. Shortcuts can be changed in Configuration, except for a 
 | Show / hide the window | `Ctrl+Alt+R` |
 | Emergency exit | `Ctrl+Alt+Q` |
 
-Global shortcuts for window visibility and emergency exit can be enabled in Configuration so they work while the window is hidden or unfocused. The default Focus mode window adjustment key is `Alt`.
+Enable global shortcuts under Configuration → Shortcuts. While the window is visible, Show / Hide and Emergency Exit work even when another app is active. When the window is hidden or minimized, only Show / Hide remains active so you can bring the window back. The default Focus mode window adjustment key is `Alt`.
 
 ## Download and run
 

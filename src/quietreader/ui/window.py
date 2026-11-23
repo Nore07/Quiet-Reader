@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
         self.tray = None
         self.hotkey = None
         self.emergency_hotkey = None
+        self._shortcut_capture_active = False
         self.worker = None
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
@@ -686,8 +687,8 @@ class MainWindow(QMainWindow):
         self.main_pages.addWidget(self.shelf)
         self.settings_page = SettingsPage(self.store, self)
         self.settings_page.settings_changed.connect(self.apply_settings)
-        self.settings_page.capture_started.connect(lambda: self._configure_hotkeys(False))
-        self.settings_page.capture_finished.connect(lambda: self._configure_hotkeys())
+        self.settings_page.capture_started.connect(lambda: self._configure_hotkeys(capture_active=True))
+        self.settings_page.capture_finished.connect(lambda: self._configure_hotkeys(capture_active=False))
         self.settings_page.notice_requested.connect(self.set_status)
         self.settings_page.close_requested.connect(self.close_settings)
         self.main_pages.addWidget(self.settings_page)
@@ -1601,10 +1602,11 @@ class MainWindow(QMainWindow):
     def _update_sidebar_book_card(self, progress_pct: str = ""):
         if not hasattr(self, "sidebar_book_title"):
             return
+        scale = self.sidebar_cover.devicePixelRatioF()
         if self.book is None:
             title = self.t("一本书，一处安静")
             meta = self.t("本地阅读 · 无需联网")
-            cover = render_cover_pixmap(title, width=36, height=48, radius=5.0, mini=True)
+            cover = render_cover_pixmap(title, width=36, height=48, radius=5.0, scale=scale, mini=True)
         else:
             title = self.book_title.text().strip() or self.book.title
             fmt = "EPUB" if self.book.encoding == "EPUB" else "TXT"
@@ -1612,7 +1614,7 @@ class MainWindow(QMainWindow):
             meta = " · ".join(parts)
             cover = render_cover_pixmap(
                 title, self.book.author, fmt, getattr(self.book, "cover", b""),
-                width=36, height=48, radius=5.0, mini=True,
+                width=36, height=48, radius=5.0, scale=scale, mini=True,
             )
         self.sidebar_cover.setPixmap(cover)
         title_metrics = QFontMetrics(self.sidebar_book_title.font())
@@ -2080,20 +2082,22 @@ class MainWindow(QMainWindow):
             self.page_label.setText(compact_page_label)
         self.reader_navigation.setProperty("compact", compact)
 
-    def _configure_hotkeys(self, enabled=None):
+    def _configure_hotkeys(self, *, capture_active=None):
+        if capture_active is not None:
+            self._shortcut_capture_active = capture_active
+        if not self.hotkey or self.closed or self.quitting:
+            return
         settings = self.settings
-        enabled = settings.global_hotkey if enabled is None else enabled
-        if self.hotkey:
-            warning = self.hotkey.configure(enabled, settings.hotkey)
-            warnings = [self.t("显示 / 隐藏：{message}", message=self.t(warning))] if warning else []
-            if self.emergency_hotkey:
-                error = self.emergency_hotkey.configure(enabled, settings.emergency_key)
-                if error:
-                    warnings.append(self.t("紧急退出：{message}", message=self.t(error)))
-            self.hotkey_notice.setText("\n".join(warnings))
-            self.hotkey_notice.setVisible(bool(warnings))
-            if self.focus_mode:
-                self.hotkey_notice.hide()
+        enabled = settings.global_hotkey and not self._shortcut_capture_active
+        warning = self.hotkey.configure(enabled, settings.hotkey)
+        warnings = [self.t("显示 / 隐藏：{message}", message=self.t(warning))] if warning else []
+        if self.emergency_hotkey:
+            emergency_enabled = enabled and self.isVisible() and not self.isMinimized()
+            error = self.emergency_hotkey.configure(emergency_enabled, settings.emergency_key)
+            if error:
+                warnings.append(self.t("紧急退出：{message}", message=self.t(error)))
+        self.hotkey_notice.setText("\n".join(warnings))
+        self.hotkey_notice.setVisible(bool(warnings) and not self.focus_mode)
 
     def _handle_escape(self):
         if self.focus_mode:
@@ -2123,8 +2127,8 @@ class MainWindow(QMainWindow):
             self._sync_page_navigation()
             return
         dialog = SettingsDialog(self.settings, self)
-        dialog.capture_started.connect(lambda: self._configure_hotkeys(False))
-        dialog.capture_finished.connect(lambda: self._configure_hotkeys())
+        dialog.capture_started.connect(lambda: self._configure_hotkeys(capture_active=True))
+        dialog.capture_finished.connect(lambda: self._configure_hotkeys(capture_active=False))
         dialog.layout_requested.connect(self.show_layout_panel)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.apply_settings(dialog.values())
@@ -2236,6 +2240,7 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         self._window_hidden = False
         super().showEvent(event)
+        self._configure_hotkeys()
         if hasattr(self, "sidebar"):
             self._sync_page_navigation()
             self._update_window_controls()
@@ -2245,6 +2250,8 @@ class MainWindow(QMainWindow):
 
     def hideEvent(self, event):
         self._window_hidden = True
+        if self.emergency_hotkey:
+            self.emergency_hotkey.unregister()
         if hasattr(self, "toast"):
             self.toast.dismiss()
         if hasattr(self, "appearance_popover"):

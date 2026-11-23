@@ -127,9 +127,9 @@ class BookItemDelegate(QStyledItemDelegate):
         cover_bytes = self._cover_cache.get(file_path)
         pm = render_cover_pixmap(
             title, author, fmt, cover_bytes,
-            width=cover_w, height=cover_h, radius=8.0, scale=2, mini=False,
+            width=cover_w, height=cover_h, radius=8.0, scale=painter.device().devicePixelRatioF(), mini=False,
         )
-        painter.drawPixmap(cover_rect.topLeft(), pm)
+        painter.drawPixmap(cover_rect, pm)
 
         if selected:
             painter.setPen(QPen(QColor(self._palette["accent"]), 2.0))
@@ -227,9 +227,9 @@ class BookItemDelegate(QStyledItemDelegate):
         cover_bytes = self._cover_cache.get(file_path)
         pm = render_cover_pixmap(
             title, author, fmt, cover_bytes,
-            width=thumb_w, height=thumb_h, radius=4.0, scale=2, mini=True,
+            width=thumb_w, height=thumb_h, radius=4.0, scale=painter.device().devicePixelRatioF(), mini=True,
         )
-        painter.drawPixmap(thumb_x, thumb_y, pm)
+        painter.drawPixmap(QRect(thumb_x, thumb_y, thumb_w, thumb_h), pm)
 
         title_font = QFont(style_option.font)
         title_font.setWeight(QFont.Weight.Medium)
