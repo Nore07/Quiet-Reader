@@ -519,7 +519,7 @@ class MainWindow(QMainWindow):
         self.pin_button = self._icon_button("pin", self.toggle_pin, "置顶", size=15, checkable=True)
         self.topbar_actions_layout.addWidget(self.pin_button)
 
-        self.focus_button = self._icon_button("focus", self.show_focus_panel, "专注", size=15, checkable=True)
+        self.focus_button = self._icon_button("fish", self.show_focus_panel, "专注", size=20, checkable=True)
         self.topbar_actions_layout.addWidget(self.focus_button)
 
         self.config_button = self._icon_button("settings", self.toggle_settings, "配置", size=15, checkable=True)
