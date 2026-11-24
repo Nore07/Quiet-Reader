@@ -14,16 +14,14 @@ BINDING_FIELDS = (
     "hotkey",
     "emergency_key",
     "moyu_key",
-    "moyu_previous_key",
-    "moyu_next_key",
     "moyu_lines_key",
 )
 GLOBAL_BINDING_FIELDS = (
     "hotkey",
     "emergency_key",
+    "next_key",
+    "previous_key",
     "moyu_key",
-    "moyu_previous_key",
-    "moyu_next_key",
     "moyu_lines_key",
 )
 

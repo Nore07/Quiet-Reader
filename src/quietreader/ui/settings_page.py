@@ -619,8 +619,8 @@ class SettingsPage(QWidget):
         self.binding_buttons: dict[str, KeyBindingButton] = {}
         groups = (
             (
-                ("next_key", "下一页（正文聚焦时）"),
-                ("previous_key", "上一页（正文聚焦时）"),
+                ("next_key", "下一页 / 下一句（阅读与摸鱼模式）"),
+                ("previous_key", "上一页 / 上一句（阅读与摸鱼模式）"),
                 ("next_chapter_key", "下一章（正文聚焦时）"),
                 ("previous_chapter_key", "上一章（正文聚焦时）"),
             ),
@@ -633,8 +633,6 @@ class SettingsPage(QWidget):
             ),
             (
                 ("moyu_key", "切换摸鱼模式"),
-                ("moyu_previous_key", "摸鱼模式上一句"),
-                ("moyu_next_key", "摸鱼模式下一句"),
                 ("moyu_lines_key", "切换摸鱼模式单行 / 两行"),
             ),
         )

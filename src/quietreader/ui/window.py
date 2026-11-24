@@ -806,12 +806,6 @@ class MainWindow(QMainWindow):
         self.moyu_shortcut = QShortcut(QKeySequence(self.settings.moyu_key), self)
         self.moyu_shortcut.setAutoRepeat(False)
         self.moyu_shortcut.activated.connect(self.toggle_moyu_mode)
-        self.moyu_previous_shortcut = QShortcut(QKeySequence(self.settings.moyu_previous_key), self)
-        self.moyu_previous_shortcut.setAutoRepeat(False)
-        self.moyu_previous_shortcut.activated.connect(lambda: self.turn_moyu_sentence(-1))
-        self.moyu_next_shortcut = QShortcut(QKeySequence(self.settings.moyu_next_key), self)
-        self.moyu_next_shortcut.setAutoRepeat(False)
-        self.moyu_next_shortcut.activated.connect(lambda: self.turn_moyu_sentence(1))
         self.moyu_lines_shortcut = QShortcut(QKeySequence(self.settings.moyu_lines_key), self)
         self.moyu_lines_shortcut.setAutoRepeat(False)
         self.moyu_lines_shortcut.activated.connect(self.toggle_moyu_lines)
@@ -2640,8 +2634,6 @@ class MainWindow(QMainWindow):
         self.focus_opacity_shortcut.setKey(QKeySequence(settings.focus_opacity_key))
         self.focus_resample_shortcut.setKey(QKeySequence(settings.focus_resample_key))
         self.moyu_shortcut.setKey(QKeySequence(settings.moyu_key))
-        self.moyu_previous_shortcut.setKey(QKeySequence(settings.moyu_previous_key))
-        self.moyu_next_shortcut.setKey(QKeySequence(settings.moyu_next_key))
         self.moyu_lines_shortcut.setKey(QKeySequence(settings.moyu_lines_key))
         self.visibility_shortcut.setKey(QKeySequence(settings.hotkey))
         self.emergency_shortcut.setKey(QKeySequence(settings.emergency_key))
@@ -2728,11 +2720,21 @@ class MainWindow(QMainWindow):
         moyu_errors = []
         for hotkey, key in zip(
             self.moyu_hotkeys,
-            (settings.moyu_key, settings.moyu_previous_key, settings.moyu_next_key, settings.moyu_lines_key),
+            (settings.moyu_key, settings.previous_key, settings.next_key, settings.moyu_lines_key),
         ):
             error = hotkey.configure(moyu_enabled, key)
             if error:
                 moyu_errors.append(f"{key}: {self.t(error)}")
+        toggle_registered = bool(self.moyu_hotkeys and self.moyu_hotkeys[0].registered)
+        lines_registered = bool(len(self.moyu_hotkeys) > 3 and self.moyu_hotkeys[3].registered)
+        if hasattr(self, "moyu_shortcut"):
+            self.moyu_shortcut.setEnabled(
+                not self._shortcut_capture_active and (not self.moyu_mode or not toggle_registered)
+            )
+        if hasattr(self, "moyu_lines_shortcut"):
+            self.moyu_lines_shortcut.setEnabled(
+                not self._shortcut_capture_active and self.moyu_mode and not lines_registered
+            )
         if hasattr(self, "moyu_strip"):
             self.moyu_strip.set_hotkey_tooltip("\n".join(moyu_errors))
         if hasattr(self, "hotkey_notice"):

@@ -107,10 +107,8 @@ class Settings:
     focus_opacity_key: str = "F9"
     focus_resample_key: str = "F8"
     focus_adjust_key: str = "Alt"
-    moyu_key: str = "Ctrl+Alt+M"
-    moyu_previous_key: str = "Ctrl+Alt+Shift+Up"
-    moyu_next_key: str = "Ctrl+Alt+Shift+Down"
-    moyu_lines_key: str = "Ctrl+Alt+Shift+L"
+    moyu_key: str = "F11"
+    moyu_lines_key: str = "F7"
     moyu_lines: int = 1
     auto_check_updates: bool = False
     focus_auto_background: bool = False
@@ -153,7 +151,23 @@ class Settings:
             result.focus_sample_trigger = raw["focus_sample_trigger"]
         if isinstance(raw.get("font_family"), str) and 0 < len(raw["font_family"]) <= 100:
             result.font_family = raw["font_family"]
-        bindings = {key: normalize_binding(raw.get(key, getattr(result, key))) for key in BINDING_FIELDS}
+        # Replace only the old shipped defaults; preserve user-selected bindings.
+        legacy_defaults = {
+            "moyu_key": "Ctrl+Alt+M",
+            "moyu_lines_key": "Ctrl+Alt+Shift+L",
+        }
+        bindings = {}
+        for key in BINDING_FIELDS:
+            value = raw.get(key, getattr(result, key))
+            if key in legacy_defaults and value == legacy_defaults[key]:
+                new_default = getattr(result, key)
+                conflict = any(
+                    normalize_binding(raw.get(other, getattr(result, other))) == new_default
+                    for other in BINDING_FIELDS
+                    if other != key
+                )
+                value = legacy_defaults[key] if conflict else new_default
+            bindings[key] = normalize_binding(value)
         if not bindings["focus_opacity_key"] or bindings["focus_opacity_key"] in {
             value for key, value in bindings.items() if key != "focus_opacity_key"
         }:

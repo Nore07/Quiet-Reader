@@ -29,7 +29,7 @@ class GlobalHotkey(QAbstractNativeEventFilter):
             return "全局快捷键格式无效。"
         flags, virtual_key = windows_hotkey(key)
         self.registered = bool(ctypes.windll.user32.RegisterHotKey(None, self.ID, flags | 0x4000, virtual_key))
-        return "" if self.registered else "全局快捷键注册失败，可能已被占用。请在设置中修改；正文翻页仍可使用。"
+        return "" if self.registered else "全局快捷键注册失败，可能已被占用。请在设置中修改按键后重试。"
 
     def unregister(self):
         if self.registered:
