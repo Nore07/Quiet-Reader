@@ -107,6 +107,17 @@ class MoyuStrip(QWidget):
         return self._line_count
 
     @property
+    def sentence_text(self):
+        return self._sentence
+
+    @property
+    def overflow_text(self):
+        _font, _lines, overflow_start = self._layout_lines()
+        if overflow_start is None:
+            return ""
+        return self._sentence[overflow_start:].lstrip()
+
+    @property
     def preferred_height(self):
         return self.SINGLE_LINE_HEIGHT if self._line_count == 1 else self.DOUBLE_LINE_HEIGHT
 
@@ -159,19 +170,12 @@ class MoyuStrip(QWidget):
         self.setMaximumHeight(self.MAXIMUM_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        background = self._palette["paper"] if self._background_color else self._palette.get("side", self._palette["paper"])
-        painter.fillRect(self.rect(), QColor(background))
-
+    def _layout_lines(self):
         text_rect = self.rect().adjusted(12, 3, -12, -3)
         font = QFont(self._font_family)
         font.setPixelSize(12)
-        painter.setFont(font)
-        painter.setPen(QColor(self._palette.get("ink_secondary", self._palette["muted"])))
         if not self._sentence:
-            return
+            return font, [], None
 
         option = QTextOption()
         option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
@@ -190,15 +194,33 @@ class MoyuStrip(QWidget):
         metrics = QFontMetrics(font)
         total_height = len(ranges) * metrics.height()
         baseline = text_rect.top() + max(0, (text_rect.height() - total_height) / 2) + metrics.ascent()
+        drawn_lines = []
+        overflow_start = None
         for row, (start, count) in enumerate(ranges):
             end = start + count
-            segment = self._sentence[start:end].strip()
+            raw_segment = self._sentence[start:end]
+            segment = raw_segment.strip()
             has_more = row == len(ranges) - 1 and bool(self._sentence[end:].strip())
             if has_more:
                 segment = metrics.elidedText(
                     segment + "…", Qt.TextElideMode.ElideRight, int(text_rect.width()),
                 )
-            painter.drawText(QPointF(text_rect.left(), baseline + row * metrics.height()), segment)
+                visible_segment = segment[:-1] if segment.endswith("…") else segment
+                leading_whitespace = len(raw_segment) - len(raw_segment.lstrip())
+                overflow_start = start + leading_whitespace + len(visible_segment)
+            drawn_lines.append((segment, QPointF(text_rect.left(), baseline + row * metrics.height())))
+        return font, drawn_lines, overflow_start
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        background = self._palette["paper"] if self._background_color else self._palette.get("side", self._palette["paper"])
+        painter.fillRect(self.rect(), QColor(background))
+        font, drawn_lines, _overflow_start = self._layout_lines()
+        painter.setFont(font)
+        painter.setPen(QColor(self._palette.get("ink_secondary", self._palette["muted"])))
+        for segment, baseline in drawn_lines:
+            painter.drawText(baseline, segment)
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y() or event.pixelDelta().y()

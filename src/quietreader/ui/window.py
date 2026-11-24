@@ -299,6 +299,7 @@ class MainWindow(QMainWindow):
         self._moyu_sentences = []
         self._moyu_sentence_index = -1
         self._moyu_offset = 0
+        self._moyu_fragment_history = []
         self._moyu_preserve_external_focus = False
         self._moyu_auto_hidden = False
         self._moyu_menu_open = False
@@ -2124,6 +2125,7 @@ class MainWindow(QMainWindow):
             self.reader.setFocus()
 
     def _refresh_moyu_sentence(self, offset=None):
+        self._moyu_fragment_history = []
         if not self.book:
             self._moyu_sentences = []
             self._moyu_sentence_index = -1
@@ -2281,14 +2283,31 @@ class MainWindow(QMainWindow):
         self._moyu_geometry = None
         self._moyu_sentences = []
         self._moyu_sentence_index = -1
+        self._moyu_fragment_history = []
         self._update_progress()
 
     def turn_moyu_sentence(self, direction):
         if not self.moyu_mode or not self.book or direction not in (-1, 1):
             return
+
+        if direction > 0:
+            overflow = self.moyu_strip.overflow_text
+            if overflow:
+                self._moyu_fragment_history.append(self.moyu_strip.sentence_text)
+                self.moyu_strip.set_sentence(overflow)
+                self._update_progress()
+                self.schedule_save()
+                return
+        elif self._moyu_fragment_history:
+            self.moyu_strip.set_sentence(self._moyu_fragment_history.pop())
+            self._update_progress()
+            self.schedule_save()
+            return
+
         target = self._moyu_sentence_index + direction
         if 0 <= target < len(self._moyu_sentences):
             self._moyu_sentence_index = target
+            self._moyu_fragment_history = []
             start, end = self._moyu_sentences[target]
             self._moyu_offset = start
             self.reader.offset = start
