@@ -1968,6 +1968,8 @@ class MainWindow(QMainWindow):
         return self.settings.language
 
     def _effective_focus_background(self) -> str:
+        if self.moyu_mode and self._sampled_focus_color:
+            return self._sampled_focus_color
         if self.settings.focus_auto_background and self._sampled_focus_color:
             return self._sampled_focus_color
         return self.settings.background_color
@@ -2003,7 +2005,7 @@ class MainWindow(QMainWindow):
             self.apply_settings(replace(self.settings, focus_auto_background=True))
         else:
             self._apply_window_style()
-            if self.focus_mode and changed:
+            if self.focus_mode and not self.moyu_mode and changed:
                 self.reader.reflow()
         if notify:
             if sample.is_complex:
@@ -2024,8 +2026,13 @@ class MainWindow(QMainWindow):
     def _schedule_auto_focus_resample(self, delay_ms: int = 140):
         if (
             not self.focus_mode
-            or not self.settings.focus_auto_background
-            or self.settings.focus_sample_trigger != "auto"
+            or (
+                not self.moyu_mode
+                and (
+                    not self.settings.focus_auto_background
+                    or self.settings.focus_sample_trigger != "auto"
+                )
+            )
             or self.closed
             or self._window_hidden
         ):
@@ -2036,8 +2043,13 @@ class MainWindow(QMainWindow):
         if (
             not self.focus_mode
             or self._focus_adjust_active
-            or not self.settings.focus_auto_background
-            or self.settings.focus_sample_trigger != "auto"
+            or (
+                not self.moyu_mode
+                and (
+                    not self.settings.focus_auto_background
+                    or self.settings.focus_sample_trigger != "auto"
+                )
+            )
             or self.closed
             or self._window_hidden
         ):
@@ -2142,7 +2154,7 @@ class MainWindow(QMainWindow):
         if default or not area.contains(current):
             width = min(area.width() - 20, max(420, int(area.width() * 0.66)))
             width = max(180, width)
-            x = area.x() + (area.width() - width) // 2
+            x = area.x() + 8
             y = area.y() + area.height() - height
         else:
             width = min(current.width(), area.width() - 20)
@@ -2212,6 +2224,8 @@ class MainWindow(QMainWindow):
         self._focus_resample_timer.stop()
         self._focus_geometry_dirty = False
         self.moyu_mode = True
+        self._sampled_focus_color = ""
+        self._sampled_focus_complex = False
         self._moyu_menu_open = False
         self.reader.hide()
         self.moyu_strip.show()
@@ -2220,6 +2234,7 @@ class MainWindow(QMainWindow):
         self._refresh_moyu_sentence(self.reader.offset)
         self.apply_settings(self.settings)
         self._position_moyu_bar(default=True)
+        self.resample_focus_background(notify=False)
         self._update_progress()
         self._moyu_visibility_timer.start()
         self._sync_moyu_visibility(initial=True)
@@ -2456,9 +2471,11 @@ class MainWindow(QMainWindow):
         else:
             alpha = 255
         effective_bg = self._effective_focus_background()
-        background_color = effective_bg if self.focus_mode and not self.moyu_mode else ""
+        background_color = effective_bg if self.focus_mode or self.moyu_mode else ""
         if hasattr(self, "reader"):
             self.reader.focus_background_override = effective_bg
+        if hasattr(self, "moyu_strip"):
+            self.moyu_strip.set_background_color(background_color if self.moyu_mode else "")
         palette = colors(self.settings.theme, background_color)
         self.setStyleSheet(stylesheet(
             palette, alpha,
@@ -2578,6 +2595,7 @@ class MainWindow(QMainWindow):
             theme=settings.theme,
             language=settings.language,
             font_family=settings.font_family,
+            background_color=self._sampled_focus_color if self.moyu_mode else "",
         )
         self._reader_settings_dirty = False
         self._sync_page_navigation()
@@ -2833,7 +2851,9 @@ class MainWindow(QMainWindow):
             self.appearance_popover.reposition()
         if hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
             self.focus_popover.reposition()
-        if self.focus_mode and not self.moyu_mode:
+        if self.moyu_mode:
+            self._schedule_auto_focus_resample(160)
+        elif self.focus_mode:
             self._focus_geometry_dirty = True
             if not self._focus_adjust_active:
                 self._schedule_auto_focus_resample(160)
@@ -2887,7 +2907,7 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange:
             self._update_window_controls()
             was_minimized = bool(event.oldState() & Qt.WindowState.WindowMinimized)
-            if was_minimized and not self.isMinimized() and self.focus_mode and not self.moyu_mode:
+            if was_minimized and not self.isMinimized() and self.focus_mode:
                 self._schedule_auto_focus_resample(140)
             self._configure_hotkeys()
 
@@ -2895,7 +2915,9 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
         if hasattr(self, "save_timer"):
             self.schedule_save()
-        if self.focus_mode and not self.moyu_mode:
+        if self.moyu_mode:
+            self._schedule_auto_focus_resample(160)
+        elif self.focus_mode:
             self._focus_geometry_dirty = True
             if not self._focus_adjust_active:
                 self._schedule_auto_focus_resample(160)
@@ -3064,6 +3086,7 @@ class MainWindow(QMainWindow):
         if (
             isinstance(watched, QWidget)
             and watched.window() is self
+            and not self.moyu_mode
             and event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease)
             and event.key() == self._focus_adjust_key()
         ):

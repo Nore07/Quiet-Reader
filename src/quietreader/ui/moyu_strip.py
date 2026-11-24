@@ -86,8 +86,11 @@ class MoyuStrip(QWidget):
         self._sentence = ""
         self._line_count = 2
         self._language = "system"
+        self._theme = "system"
+        self._background_color = ""
         self._palette = colors("system")
         self._font_family = "Microsoft YaHei"
+        self._drag_offset = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self.setAccessibleName(tr("摸鱼模式阅读条", self._language))
@@ -98,14 +101,26 @@ class MoyuStrip(QWidget):
     def line_count(self):
         return self._line_count
 
-    def set_preferences(self, *, lines: int, theme: str, language: str, font_family: str):
+    def set_preferences(
+        self, *, lines: int, theme: str, language: str, font_family: str, background_color="",
+    ):
         self._line_count = 1 if lines == 1 else 2
-        self._palette = colors(theme)
+        self._theme = theme
         self._language = language
         self._font_family = font_family
+        self._background_color = background_color or ""
+        self._palette = colors(theme, self._background_color)
         self.setAccessibleName(tr("摸鱼模式阅读条", language))
         self.setToolTip(tr("鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动可调整位置。", language))
         self._sync_height()
+        self.update()
+
+    def set_background_color(self, background_color=""):
+        background_color = background_color or ""
+        if background_color == self._background_color:
+            return
+        self._background_color = background_color
+        self._palette = colors(self._theme, background_color)
         self.update()
 
     def set_sentence(self, sentence: str):
@@ -124,7 +139,8 @@ class MoyuStrip(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        painter.fillRect(self.rect(), QColor(self._palette.get("side", self._palette["paper"])))
+        background = self._palette["paper"] if self._background_color else self._palette.get("side", self._palette["paper"])
+        painter.fillRect(self.rect(), QColor(background))
         painter.setPen(QColor(self._palette["line"]))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
@@ -176,11 +192,25 @@ class MoyuStrip(QWidget):
             event.button() == Qt.MouseButton.LeftButton
             and event.modifiers() & Qt.KeyboardModifier.AltModifier
         ):
-            handle = self.windowHandle()
-            if handle and handle.startSystemMove():
-                event.accept()
-                return
+            global_position = event.globalPosition().toPoint()
+            self._drag_offset = global_position - self.window().frameGeometry().topLeft()
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window().move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_offset is not None:
+            self._drag_offset = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
