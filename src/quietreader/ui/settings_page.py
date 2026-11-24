@@ -240,13 +240,15 @@ class SettingsPage(QWidget):
         self.picker.selected.connect(self._on_picked_bg_color)
         self.picker.failed.connect(lambda msg: self.notice_requested.emit(msg))
 
-        # Prevent accidental wheel scrolling on font combo and opacity sliders inside ScrollArea
+        # Route wheel events from settings controls to the ScrollArea instead of changing values.
         self._wheel_filter = _PreferencesWheelFilter(self.scroll.viewport(), self)
         self.font_combo.installEventFilter(self._wheel_filter)
         if self.font_combo.lineEdit():
             self.font_combo.lineEdit().installEventFilter(self._wheel_filter)
         self.opacity_slider.installEventFilter(self._wheel_filter)
         self.complex_opacity_slider.installEventFilter(self._wheel_filter)
+        for control in self.typo_sliders.values():
+            control.slider.installEventFilter(self._wheel_filter)
 
         self.select_section("appearance")
 

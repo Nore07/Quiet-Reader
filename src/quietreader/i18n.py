@@ -37,6 +37,7 @@ EN = {
     "页边距": "Page padding",
     "系统": "System",
     "调整即刻生效": "Changes apply immediately",
+    "滑块松开后应用": "Sliders apply on release",
     "更多配置": "More settings",
     "搜索书名或作者…": "Search title or author…",
     "网格视图": "Grid view",

@@ -107,7 +107,17 @@ class _SliderControl(QWidget):
 
     valueChanged = Signal(float)
 
-    def __init__(self, label_source: str, low: float, high: float, step: float, unit: str, decimals: int = 0, parent=None):
+    def __init__(
+        self,
+        label_source: str,
+        low: float,
+        high: float,
+        step: float,
+        unit: str,
+        decimals: int = 0,
+        parent=None,
+        commit_on_release: bool = False,
+    ):
         super().__init__(parent)
         self.label_source = label_source
         self.low = low
@@ -117,6 +127,8 @@ class _SliderControl(QWidget):
         self.decimals = decimals
         self._scale = round(1.0 / step) if step < 1 else 1
         self._syncing = False
+        self._commit_on_release = bool(commit_on_release)
+        self._drag_start_value = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -145,6 +157,8 @@ class _SliderControl(QWidget):
         self.slider = ThinSlider(Qt.Orientation.Horizontal, self)
         self.slider.setRange(self._to_int(low), self._to_int(high))
         self.slider.valueChanged.connect(self._on_slider_changed)
+        self.slider.sliderPressed.connect(self._on_slider_pressed)
+        self.slider.sliderReleased.connect(self._on_slider_released)
 
         self.plus_btn = QPushButton("+", self)
         self.plus_btn.setObjectName("stepperButton")
@@ -175,6 +189,8 @@ class _SliderControl(QWidget):
         self.slider.setValue(self._to_int(clamped))
         self.value_label.setText(self._format(clamped))
         self._syncing = False
+        if self._commit_on_release and self.slider.isSliderDown():
+            self._drag_start_value = self.slider.value()
 
     def value(self):
         return self._from_int(self.slider.value())
@@ -183,10 +199,24 @@ class _SliderControl(QWidget):
         step_units = max(1, round(self.step * self._scale))
         self.slider.setValue(max(self.slider.minimum(), min(self.slider.maximum(), self.slider.value() + delta * step_units)))
 
+    def _on_slider_pressed(self):
+        if self._commit_on_release:
+            self._drag_start_value = self.slider.value()
+
+    def _on_slider_released(self):
+        if not self._commit_on_release:
+            return
+        start_value = self._drag_start_value
+        self._drag_start_value = None
+        if start_value is not None and self.slider.value() != start_value:
+            self.valueChanged.emit(float(self.value()))
+
     def _on_slider_changed(self, raw: int):
         val = self._from_int(raw)
         self.value_label.setText(self._format(val))
         if not self._syncing:
+            if self._commit_on_release and self.slider.isSliderDown():
+                return
             self.valueChanged.emit(float(val))
 
     def retranslate(self, language: str):
@@ -275,7 +305,9 @@ class AppearancePopover(FloatingPopover):
             ("padding", "页边距", 12, 72, 2, " px", 0),
         )
         for key, label, low, high, step, unit, dec in specs:
-            ctrl = _SliderControl(label, low, high, step, unit, dec, content)
+            ctrl = _SliderControl(
+                label, low, high, step, unit, dec, content, commit_on_release=True
+            )
             ctrl.valueChanged.connect(lambda _v: self._emit_change())
             self.sliders[key] = ctrl
             body.addWidget(ctrl)
@@ -288,7 +320,7 @@ class AppearancePopover(FloatingPopover):
 
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 2, 0, 0)
-        self.live_note = QLabel("调整即刻生效", self)
+        self.live_note = QLabel("滑块松开后应用", self)
         self.live_note.setObjectName("status")
         self.more_button = QPushButton("更多配置 →", self)
         self.more_button.setObjectName("popoverLink")
@@ -327,7 +359,7 @@ class AppearancePopover(FloatingPopover):
         self.header_label.setText(tr("排版外观", self._language))
         self.theme_section_label.setText(tr("阅读主题", self._language))
         self.font_label.setText(tr("正文字体", self._language))
-        self.live_note.setText(tr("调整即刻生效", self._language))
+        self.live_note.setText(tr("滑块松开后应用", self._language))
         self.more_button.setText(f"{tr('更多配置', self._language)} →")
         self._syncing = False
 

@@ -26,6 +26,10 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 
 在「配置 → 专注与窗口」使用「桌面取色」采样背景，也可自行设置背景不透明度和文字颜色。按 `F10` 进入专注模式后，阅读控件会隐藏。按住默认调整键 `Alt` 可拖动窗口或拖动边缘缩放，松开后窗口轮廓消失。按 `Esc` 返回普通阅读界面。
 
+![专注浮窗展示自动采样窗口外沿颜色、采样触发方式和背景不透明度上限](docs/screenshots/focus-popover-auto-background.png)
+
+专注浮窗可自动采样窗口外沿颜色，并显示采样结果与触发方式。复杂背景可限制不透明度上限；拖动滑块时数值会更新，松开鼠标后才应用到阅读页面，避免拖动过程中反复重排。
+
 ### 书架
 
 ![书架的封面网格视图，左侧显示最近阅读、所有书籍和自建分类](docs/screenshots/bookshelf.png)
@@ -101,7 +105,7 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 
 ## 获取与运行
 
-**下载软件包：** [QuietReader 0.1.6 Windows x64 便携版](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip)（[SHA-256 校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip.sha256)）可在 [GitHub Releases](https://github.com/Nore07/Quiet-Reader/releases) 下载。压缩包不包含个人配置或书籍；解压后运行 `QuietReader.exe`，程序会在其旁边创建 `data\`。运行时请保留解压目录中的全部文件。
+**下载最新软件包：** [打开 GitHub 最新正式版页面](https://github.com/Nore07/Quiet-Reader/releases/latest)，选择 Windows x64 便携版 ZIP 或安装程序；对应的 SHA-256 校验文件也在同一页面。链接会自动指向最新正式版，不必随版本更新 README。压缩包不包含个人配置或书籍；解压后运行 `QuietReader.exe`，程序会在其旁边创建 `data\`。运行时请保留解压目录中的全部文件。
 
 **使用安装包**
 
