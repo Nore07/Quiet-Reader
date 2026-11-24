@@ -86,6 +86,7 @@ def initial_state():
         "last_browse_dir": "",
         "last_update_check": 0,
         "window": [100, 100, 1000, 760],
+        "moyu_window": None,
     }
 
 
@@ -132,6 +133,13 @@ class StateStore:
                 bounds = value.get("window")
                 if isinstance(bounds, list) and len(bounds) == 4 and all(type(v) is int and abs(v) < 100000 for v in bounds):
                     clean["window"] = bounds
+                moyu_bounds = value.get("moyu_window")
+                if (
+                    isinstance(moyu_bounds, list) and len(moyu_bounds) == 4
+                    and all(type(v) is int and abs(v) < 100000 for v in moyu_bounds)
+                    and moyu_bounds[2] >= 180 and moyu_bounds[3] > 0
+                ):
+                    clean["moyu_window"] = moyu_bounds
                 self.state = clean
                 if path == self.backup:
                     self.warning = "上次保存数据损坏，已从备份恢复。"

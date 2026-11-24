@@ -2148,20 +2148,44 @@ class MainWindow(QMainWindow):
             return
         area = screen.availableGeometry()
         current = self.geometry()
-        if default or not area.contains(current):
-            width = max(180, min(500, area.width() - 16))
-            height = self.moyu_strip.preferred_height
-            x = area.x() + 8
-            y = area.bottom() - height + 1
+        if default:
+            bounds = self._constrain_moyu_geometry(self.store.state.get("moyu_window"), area)
+            if bounds is None:
+                width = max(180, min(500, area.width() - 16))
+                height = self.moyu_strip.preferred_height
+                bounds = self._constrain_moyu_geometry(
+                    (area.x() + 8, area.bottom() - height + 1, width, height), area,
+                )
         else:
-            width = min(current.width(), area.width() - 20)
             height = max(current.height(), self.moyu_strip.minimumHeight())
-            x = max(area.x(), min(current.x(), area.right() - width + 1))
             bottom = current.y() + current.height()
-            y = max(area.y(), min(bottom - height, area.bottom() - height + 1))
-        self.setGeometry(QRect(x, y, width, height))
+            bounds = self._constrain_moyu_geometry(
+                (current.x(), bottom - height, current.width(), height), area,
+            )
+        if bounds is None:
+            return
+        self.setGeometry(bounds)
         if self.moyu_mode:
             self._moyu_bar_geometry = QRect(self.geometry())
+
+    def _constrain_moyu_geometry(self, bounds, area):
+        if (
+            not isinstance(bounds, (list, tuple)) or len(bounds) != 4
+            or any(type(value) is not int for value in bounds)
+        ):
+            return None
+        x, y, width, height = bounds
+        if width <= 0 or height <= 0:
+            return None
+        width = max(180, min(width, max(180, area.width() - 16)))
+        minimum_height = self.moyu_strip.minimumHeight()
+        maximum_height = max(minimum_height, min(self.moyu_strip.MAXIMUM_HEIGHT, area.height()))
+        height = max(minimum_height, min(height, maximum_height))
+        max_x = max(area.x(), area.right() - width + 1)
+        max_y = max(area.y(), area.bottom() - height + 1)
+        x = max(area.x(), min(x, max_x))
+        y = max(area.y(), min(y, max_y))
+        return QRect(x, y, width, height)
 
     def _moyu_pointer_is_near(self):
         return self.geometry().adjusted(-28, -34, 28, 34).contains(QCursor.pos())
@@ -2250,6 +2274,7 @@ class MainWindow(QMainWindow):
         return_to_focus = self._moyu_return_to_focus
         previous_geometry = QRect(self._moyu_geometry) if self._moyu_geometry is not None else None
         was_maximized = self._moyu_was_maximized
+        self.save_state()
         self._moyu_visibility_timer.stop()
         self._moyu_hide_timer.stop()
         self._moyu_auto_hidden = False
@@ -2831,7 +2856,10 @@ class MainWindow(QMainWindow):
 
     def _screen_removed(self, *args):
         screens = [s.availableGeometry().getRect() for s in QGuiApplication.screens()]
-        self.setGeometry(*visible_bounds(self.geometry().getRect(), screens))
+        if self.moyu_mode:
+            self._position_moyu_bar()
+        else:
+            self.setGeometry(*visible_bounds(self.geometry().getRect(), screens))
 
     def reveal(self):
         if self.moyu_mode:
@@ -2868,7 +2896,9 @@ class MainWindow(QMainWindow):
             return False
         self.store.state["settings"] = self.settings.to_dict()
         self.store.state["last_browse_dir"] = self._last_browse_dir
-        if not self.moyu_mode and not self.isMinimized() and not self.isMaximized():
+        if self.moyu_mode and not self.isMinimized():
+            self.store.state["moyu_window"] = list(self.geometry().getRect())
+        elif not self.isMinimized() and not self.isMaximized():
             bounds = self.geometry()
             self.store.state["window"] = list(bounds.getRect())
         if self.book:
