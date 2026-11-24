@@ -304,6 +304,7 @@ class MainWindow(QMainWindow):
         self._focus_adjust_active = False
         self._focus_adjust_drag = None
         self._focus_system_drag_active = False
+        self._focus_adjust_mouse_drag_active = False
         self._focus_cursor_override = False
         self._drag_hover_active = False
         self._drag_has_valid = False
@@ -2021,6 +2022,7 @@ class MainWindow(QMainWindow):
         self._focus_resample_timer.stop()
         self._focus_geometry_dirty = False
         self._set_focus_adjust_active(False)
+        self._focus_adjust_mouse_drag_active = False
         self._drag_has_valid = False
         self._set_drag_hover_active(False)
         self._focus_opacity_override = None
@@ -2773,6 +2775,7 @@ class MainWindow(QMainWindow):
             return super().eventFilter(watched, event)
 
         if event_type == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and self._focus_adjust_active:
+            self._focus_adjust_mouse_drag_active = True
             global_position = event.globalPosition().toPoint()
             edges = self._focus_edges_at(global_position)
             handle = self.windowHandle()
@@ -2785,19 +2788,32 @@ class MainWindow(QMainWindow):
             event.accept()
             return True
 
-        if event_type == QEvent.Type.MouseMove and self._focus_adjust_active:
+        if event_type == QEvent.Type.MouseMove:
             global_position = event.globalPosition().toPoint()
-            if self._focus_adjust_drag and event.buttons() & Qt.MouseButton.LeftButton:
-                self._resize_focus_geometry(global_position)
-                event.accept()
-                return True
-            if not event.buttons() & Qt.MouseButton.LeftButton:
+            dragging_left = bool(event.buttons() & Qt.MouseButton.LeftButton)
+            if self._focus_adjust_mouse_drag_active:
+                # Native system moves also send mouse events through the reader widget.
+                if dragging_left and self._focus_adjust_active and self._focus_adjust_drag:
+                    self._resize_focus_geometry(global_position)
+                if dragging_left:
+                    event.accept()
+                    return True
+                self._focus_adjust_mouse_drag_active = False
+                self._focus_adjust_drag = None
                 self._focus_system_drag_active = False
-            if not self._focus_system_drag_active:
-                self._update_focus_adjust_cursor(global_position)
+            if self._focus_adjust_active:
+                if not dragging_left:
+                    self._focus_system_drag_active = False
+                if not self._focus_system_drag_active:
+                    self._update_focus_adjust_cursor(global_position)
         elif event_type == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            was_focus_drag = self._focus_adjust_mouse_drag_active
+            self._focus_adjust_mouse_drag_active = False
             self._focus_adjust_drag = None
             self._focus_system_drag_active = False
+            if was_focus_drag:
+                event.accept()
+                return True
         return super().eventFilter(watched, event)
 
     def closeEvent(self, event):
