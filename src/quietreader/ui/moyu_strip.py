@@ -164,8 +164,6 @@ class MoyuStrip(QWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         background = self._palette["paper"] if self._background_color else self._palette.get("side", self._palette["paper"])
         painter.fillRect(self.rect(), QColor(background))
-        painter.setPen(QColor(self._palette["line"]))
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
         text_rect = self.rect().adjusted(12, 3, -12, -3)
         font = QFont(self._font_family)
@@ -300,15 +298,6 @@ class MoyuStrip(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             global_position = event.globalPosition().toPoint()
-            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
-                self._drag_state = {
-                    "kind": "move",
-                    "origin": global_position,
-                    "offset": global_position - self.window().frameGeometry().topLeft(),
-                }
-                self.setCursor(Qt.CursorShape.SizeAllCursor)
-                event.accept()
-                return
             edges = self._resize_edges_at(event.position().toPoint())
             if edges:
                 self._drag_state = {
@@ -318,6 +307,15 @@ class MoyuStrip(QWidget):
                     "edges": edges,
                 }
                 self.setCursor(self._resize_cursor(edges))
+                event.accept()
+                return
+            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                self._drag_state = {
+                    "kind": "move",
+                    "origin": global_position,
+                    "offset": global_position - self.window().frameGeometry().topLeft(),
+                }
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
                 event.accept()
                 return
         super().mousePressEvent(event)
