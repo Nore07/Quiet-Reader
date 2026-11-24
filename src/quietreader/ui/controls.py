@@ -1,12 +1,13 @@
 """Custom self-painted Qt primitives aligned with QuietReader design tokens."""
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QComboBox, QFrame, QHBoxLayout, QPushButton, QSlider,
+    QAbstractButton, QApplication, QComboBox, QFrame, QHBoxLayout, QPushButton, QScrollArea, QSizePolicy, QSlider,
 )
 
 from quietreader.ui.icons import render_icon_pixmap, vector_icon
+from quietreader.ui.tokens import resolve_palette
 
 
 class ThinSlider(QSlider):
@@ -327,9 +328,23 @@ class FloatingPopover(QFrame):
         parent = self.parentWidget()
         if parent is None:
             return
-        self.adjustSize()
-        width = min(self.sizeHint().width(), max(180, parent.width() - 24))
-        height = min(self.sizeHint().height(), max(120, parent.height() - 56))
+        scroll_areas = self.findChildren(QScrollArea)
+        scroll_positions = [
+            (area.verticalScrollBar(), area.verticalScrollBar().value())
+            for area in scroll_areas
+        ]
+        self.ensurePolished()
+        for area in scroll_areas:
+            inner = area.widget()
+            if inner is not None and inner.layout() is not None:
+                inner.layout().invalidate()
+                inner.layout().activate()
+        if self.layout() is not None:
+            self.layout().invalidate()
+            self.layout().activate()
+        hint = self.sizeHint().expandedTo(self.minimumSize())
+        width = min(hint.width(), max(180, parent.width() - 24))
+        height = min(hint.height(), max(120, parent.height() - 56))
         if self._anchor is not None and self._anchor.isVisible():
             origin = self._anchor.mapTo(parent, QPoint(0, self._anchor.height() + 6))
             if self._align == "right":
@@ -342,7 +357,12 @@ class FloatingPopover(QFrame):
             y = 48
         x = max(12, min(x, parent.width() - width - 12))
         y = max(12, min(y, parent.height() - height - 12))
-        self.setGeometry(x, y, width, height)
+        target = QRect(x, y, width, height)
+        if self.geometry() != target:
+            self.setGeometry(target)
+        for bar, value in scroll_positions:
+            if value > 0 and bar.maximum() > 0:
+                bar.setValue(min(value, bar.maximum()))
 
     def _install_filter(self):
         app = QApplication.instance()
@@ -403,4 +423,71 @@ class QuietComboBox(QComboBox):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         pm = render_icon_pixmap("chevron_down", self._chevron_color, 12)
         painter.drawPixmap(self.width() - 19, (self.height() - 12) // 2, pm)
+        painter.end()
+
+
+class ColorSwatchChip(QAbstractButton):
+    """Clickable pill displaying a rounded color swatch next to its hex value or auto label."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hex_color = ""
+        self._fallback_color = "#f6f4ec"
+        self._label = ""
+        self._hovered = False
+        self._palette = resolve_palette("light")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(28)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def set_color(self, hex_color: str, fallback_color: str, label: str):
+        self._hex_color = hex_color
+        self._fallback_color = fallback_color
+        self._label = label
+        self.updateGeometry()
+        self.update()
+
+    def apply_palette(self, palette: dict[str, str]):
+        self._palette = dict(palette)
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        font = QFont(self.font())
+        font.setPixelSize(12)
+        fm = QFontMetrics(font)
+        return QSize(max(92, 34 + fm.horizontalAdvance(self._label) + 12), 28)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        bg = self._palette["accent_hover"] if self._hovered else self._palette["side"]
+        border = self._palette["line_strong"] if self._hovered else self._palette["line"]
+        painter.setPen(QPen(QColor(border), 1.0))
+        painter.setBrush(QColor(bg))
+        painter.drawRoundedRect(rect, 7.0, 7.0)
+
+        swatch_color = QColor(self._hex_color or self._fallback_color)
+        swatch_rect = QRectF(8.0, (self.height() - 14.0) / 2.0, 14.0, 14.0)
+        painter.setPen(QPen(QColor(self._palette["line_strong"]), 1.0))
+        painter.setBrush(swatch_color)
+        painter.drawRoundedRect(swatch_rect, 4.0, 4.0)
+
+        font = QFont(self.font())
+        font.setPixelSize(11.5)
+        painter.setFont(font)
+        painter.setPen(QColor(self._palette["ink"] if self._hex_color else self._palette["muted"]))
+        text_rect = QRect(28, 0, max(20, self.width() - 34), self.height())
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
         painter.end()

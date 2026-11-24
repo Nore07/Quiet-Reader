@@ -126,6 +126,7 @@ class SettingsDialog(QDialog):
             ("previous_chapter_key", "上一章（正文聚焦时）"),
             ("focus_key", "切换专注模式"),
             ("focus_opacity_key", "切换专注模式透明度"),
+            ("focus_resample_key", "重新采样专注背景色"),
             ("hotkey", "显示 / 隐藏快捷键"),
             ("emergency_key", "紧急退出快捷键"),
         ]:

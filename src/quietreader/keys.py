@@ -3,7 +3,17 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 
 RESERVED_BINDINGS = {"Esc", "Ctrl+O", "Ctrl+,", "Ctrl+C"}
-BINDING_FIELDS = ("next_key", "previous_key", "next_chapter_key", "previous_chapter_key", "focus_key", "focus_opacity_key", "hotkey", "emergency_key")
+BINDING_FIELDS = (
+    "next_key",
+    "previous_key",
+    "next_chapter_key",
+    "previous_chapter_key",
+    "focus_key",
+    "focus_opacity_key",
+    "focus_resample_key",
+    "hotkey",
+    "emergency_key",
+)
 
 
 def normalize_binding(value):
