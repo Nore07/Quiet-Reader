@@ -19,6 +19,7 @@ fix(storage): 修复迁移后的书籍路径
 ~~~
 
 提交正文应说明修改原因和主要做法。不要对已推送到共享分支的提交执行强制推送或改写历史。
+Codex 在功能分支上每完成一个有明确结果且可验证的阶段，必须创建一次本地提交；提交只包含该阶段相关改动。未经用户在当前任务中明确确认，不得推送远程。
 
 ## 本地运行
 
@@ -37,3 +38,4 @@ py -3.12 -m venv .venv
 For substantial features or data-format changes, open an Issue first. Create a focused branch from the latest `main` (`feat/<topic>`, `fix/<topic>`, or `docs/<topic>`), describe the change and verification in a Pull Request, and include screenshots for UI changes. Direct pushes to the protected `main` branch are blocked. Pull Requests from collaborators and outside contributors require one approval from another collaborator with write access; new commits invalidate earlier approvals. The repository owner may bypass the review requirement only when merging through a Pull Request. Resolve review conversations before merging. Maintainers handle releases.
 
 Use concise commit subjects such as `fix(storage): repair relocated bookshelf paths`, with a body explaining why and how. Do not force-push or rewrite history on shared branches. Use the project virtual environment described above and report the checks you actually ran. Never commit `.venv`, `data`, personal books or settings, build output, secrets, or local logs.
+Codex must create a local commit on the feature branch after each clearly scoped, verifiable stage, containing only that stage's changes. Do not push unless the user explicitly authorizes it in the current task.
