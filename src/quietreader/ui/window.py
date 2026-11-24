@@ -1976,7 +1976,7 @@ class MainWindow(QMainWindow):
         if self._focus_opacity_override is not None:
             return self._focus_opacity_override
         opacity = self.settings.opacity
-        if self.settings.focus_auto_background and self._sampled_focus_complex:
+        if (self.moyu_mode or self.settings.focus_auto_background) and self._sampled_focus_complex:
             return min(opacity, self.settings.focus_complex_opacity)
         return opacity
 
@@ -2521,9 +2521,9 @@ class MainWindow(QMainWindow):
             )
 
     def _apply_window_style(self):
-        if self.focus_mode and not self.moyu_mode:
-            opacity = self._effective_focus_opacity()
-            if self._focus_adjust_active and opacity == 0:
+        opacity = self._effective_focus_opacity() if self.focus_mode or self.moyu_mode else 1.0
+        if self.focus_mode or self.moyu_mode:
+            if self._focus_adjust_active and opacity == 0 and not self.moyu_mode:
                 # A fully transparent surface can miss mouse input. Make only
                 # that case hit-testable while Alt is held; preserve every
                 # already-visible opacity and restore zero on key release.
@@ -2538,11 +2538,13 @@ class MainWindow(QMainWindow):
             self.reader.focus_background_override = effective_bg
         if hasattr(self, "moyu_strip"):
             self.moyu_strip.set_background_color(background_color if self.moyu_mode else "")
+            self.moyu_strip.set_background_opacity(opacity if self.moyu_mode else 1.0)
+            self.moyu_strip.set_adjust_outline(self.moyu_mode and self._focus_adjust_active)
         palette = colors(self.settings.theme, background_color)
         self.setStyleSheet(stylesheet(
-            palette, alpha,
+            palette, 0 if self.moyu_mode else alpha,
             borderless=self.focus_mode or self.moyu_mode,
-            resize_outline=(self.focus_mode or self.moyu_mode) and self._focus_adjust_active,
+            resize_outline=self.focus_mode and not self.moyu_mode and self._focus_adjust_active,
             drop_highlight=self._drag_hover_active and not self.focus_mode,
         ))
         if hasattr(self, "brand_mark"):

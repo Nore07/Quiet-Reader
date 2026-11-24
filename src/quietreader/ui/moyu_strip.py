@@ -1,7 +1,7 @@
 """Minimal status-bar-like reader surface used by Moyu mode."""
 
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QTextLayout, QTextOption
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen, QTextLayout, QTextOption
 from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
 
 from quietreader.i18n import tr
@@ -93,6 +93,8 @@ class MoyuStrip(QWidget):
         self._language = "system"
         self._theme = "system"
         self._background_color = ""
+        self._background_opacity = 1.0
+        self._adjust_outline = False
         self._palette = colors("system")
         self._font_family = "Microsoft YaHei"
         self._drag_state = None
@@ -152,6 +154,20 @@ class MoyuStrip(QWidget):
             return
         self._background_color = background_color
         self._palette = colors(self._theme, background_color)
+        self.update()
+
+    def set_background_opacity(self, opacity: float):
+        opacity = max(0.0, min(1.0, float(opacity)))
+        if opacity == self._background_opacity:
+            return
+        self._background_opacity = opacity
+        self.update()
+
+    def set_adjust_outline(self, active: bool):
+        active = bool(active)
+        if active == self._adjust_outline:
+            return
+        self._adjust_outline = active
         self.update()
 
     def set_sentence(self, sentence: str):
@@ -215,12 +231,26 @@ class MoyuStrip(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         background = self._palette["paper"] if self._background_color else self._palette.get("side", self._palette["paper"])
-        painter.fillRect(self.rect(), QColor(background))
+        background_color = QColor(background)
+        background_color.setAlpha(round(self._background_opacity * 255))
+        painter.fillRect(self.rect(), background_color)
         font, drawn_lines, _overflow_start = self._layout_lines()
         painter.setFont(font)
         painter.setPen(QColor(self._palette.get("ink_secondary", self._palette["muted"])))
         for segment, baseline in drawn_lines:
             painter.drawText(baseline, segment)
+        if self._adjust_outline:
+            sampled_background = QColor(background)
+            hue, _saturation, _value, _alpha = sampled_background.getHsv()
+            if hue < 0:
+                hue = QColor(self._palette.get("accent", "#315743")).hue()
+            if hue < 0:
+                hue = 165
+            outline_value = 150 if sampled_background.lightness() > 128 else 255
+            outline = QColor.fromHsv((hue + 150) % 360, 235, outline_value)
+            painter.setPen(QPen(outline, 2, Qt.PenStyle.SolidLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self.rect().adjusted(1, 1, -2, -2))
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y() or event.pixelDelta().y()
