@@ -64,21 +64,6 @@ def _draw_icon(painter: QPainter, name: str):
         outline.cubicTo(17, 6, 9, 5.6, 5.2, 8.5)
         painter.drawPath(outline)
 
-        dorsal_fin = QPainterPath()
-        dorsal_fin.moveTo(9.8, 6.7)
-        dorsal_fin.cubicTo(10.6, 4, 13.2, 3.4, 15.2, 5.6)
-        painter.drawPath(dorsal_fin)
-
-        ventral_fin = QPainterPath()
-        ventral_fin.moveTo(9.8, 17.3)
-        ventral_fin.cubicTo(10.6, 20, 13.2, 20.6, 15.2, 18.4)
-        painter.drawPath(ventral_fin)
-
-        gill = QPainterPath()
-        gill.moveTo(14.8, 8.8)
-        gill.cubicTo(13.7, 10.6, 13.7, 13.4, 14.8, 15.2)
-        painter.drawPath(gill)
-
         painter.save()
         eye_color = painter.pen().color()
         painter.setPen(Qt.PenStyle.NoPen)
