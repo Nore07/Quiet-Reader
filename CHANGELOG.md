@@ -1,5 +1,51 @@
 # QuietReader 更新日志 / Changelog
 
+## [0.1.8] — 2026-11-24
+
+### 简体中文
+
+QuietReader 0.1.8 修复设置滑块和专注模式窗口调整时的交互问题，提供 Windows x64 便携版与安装升级包。
+
+#### 下载与升级
+
+- 便携版：[QuietReader-0.1.8-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip)。
+- SHA-256：`568cc15c8fc8a620484747c4ebfaece680e129a22324551c193eafb4c477709d`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip.sha256)。
+- 安装升级包：[QuietReader-Setup-0.1.8-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe)。
+- SHA-256：`6fe9a95f6c49fd47c9f6b550fc71e792493ffbbd6933728ae4504507d26f1001`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe.sha256)。
+- 更新时保留原来的 `data` 文件夹；安装程序原地升级会保留现有数据。便携包不包含个人书籍或配置，且软件包未进行代码签名。
+
+#### 本次改进
+
+- 「配置 → 专注与窗口」和「配置 → 阅读与排版」的滑动条不再响应鼠标滚轮，避免误调数值。
+- 「排版外观」与「专注模式」浮窗中的滑动条在拖动时只更新数值，松开鼠标后才应用到阅读页面；配置页隐藏阅读内容时延后排版重排，减少拖动卡顿。
+- 修复专注模式下按住 `Alt` 拖动或缩放窗口时误选中正文的问题。
+- 更新中英文 README，增加专注浮窗截图与说明，并让下载入口自动指向最新正式版。
+
+本版本不改变配置格式；升级后保留配置、阅读进度、书签和书籍数据。
+
+### English
+
+QuietReader 0.1.8 is a Windows x64 maintenance release with smoother settings sliders and improved Focus window adjustment.
+
+#### Download and upgrade
+
+- Portable package: [QuietReader-0.1.8-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip).
+- SHA-256: `568cc15c8fc8a620484747c4ebfaece680e129a22324551c193eafb4c477709d`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip.sha256).
+- Setup and upgrade package: [QuietReader-Setup-0.1.8-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe).
+- SHA-256: `6fe9a95f6c49fd47c9f6b550fc71e792493ffbbd6933728ae4504507d26f1001`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe.sha256).
+- Keep the existing `data` folder when updating. Setup preserves it during an in-place upgrade. The portable package excludes personal books and settings. The packages are unsigned.
+
+#### Changes
+
+- Mouse-wheel input no longer changes sliders in Configuration → Focus & window or Reading & typography.
+- Typography and Focus popover sliders update their values while dragging and apply the reading-page change once on release. The settings page defers reader reflow while the reader is hidden, reducing drag lag.
+- Fixed accidental text selection when holding `Alt` to move or resize the Focus window.
+- Updated the Chinese and English READMEs with a Focus popover screenshot and a link to the latest stable release.
+
+This release does not change the settings format. Existing preferences, reading progress, bookmarks, and books are preserved.
+
+[完整变更 / Full changelog](https://github.com/Nore07/Quiet-Reader/compare/v0.1.7...v0.1.8)
+
 ## [0.1.6] — 2026-11-19
 
 ### 简体中文
