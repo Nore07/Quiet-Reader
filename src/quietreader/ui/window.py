@@ -294,6 +294,7 @@ class MainWindow(QMainWindow):
         self.moyu_mode = False
         self._moyu_return_to_focus = False
         self._moyu_geometry = None
+        self._moyu_bar_geometry = None
         self._moyu_previous_maximum_size = None
         self._moyu_was_maximized = False
         self._moyu_sentences = []
@@ -2165,6 +2166,8 @@ class MainWindow(QMainWindow):
             bottom = current.y() + current.height()
             y = max(area.y(), min(bottom - height, area.bottom() - height + 1))
         self.setGeometry(QRect(x, y, width, height))
+        if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
 
     def _moyu_pointer_is_near(self):
         return self.geometry().adjusted(-28, -34, 28, 34).contains(QCursor.pos())
@@ -2185,7 +2188,6 @@ class MainWindow(QMainWindow):
             if self._moyu_auto_hidden:
                 self._moyu_auto_hidden = False
                 self.show()
-                self.raise_()
                 self._configure_hotkeys()
             return
         if initial:
@@ -2281,6 +2283,7 @@ class MainWindow(QMainWindow):
             self.show()
         self._moyu_preserve_external_focus = False
         self._moyu_geometry = None
+        self._moyu_bar_geometry = None
         self._moyu_sentences = []
         self._moyu_sentence_index = -1
         self._moyu_fragment_history = []
@@ -2612,6 +2615,7 @@ class MainWindow(QMainWindow):
             | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, self.moyu_mode)
         if self.windowFlags() & mask != flags & mask:
             self.setWindowFlags(flags)
         self.setGeometry(bounds)
@@ -2828,6 +2832,11 @@ class MainWindow(QMainWindow):
         self.setGeometry(*visible_bounds(self.geometry().getRect(), screens))
 
     def reveal(self):
+        if self.moyu_mode:
+            bar_geometry = QRect(self._moyu_bar_geometry or self.geometry())
+            self.showNormal()
+            self.setGeometry(bar_geometry)
+            return
         self._screen_removed()
         self.showNormal()
         self.raise_()
@@ -2840,6 +2849,8 @@ class MainWindow(QMainWindow):
             self.reveal()
 
     def hide_or_minimize(self):
+        if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
         self.save_state()
         if self.tray and self.tray.isVisible():
             self.hide()
@@ -2883,6 +2894,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
             self.focus_popover.reposition()
         if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
             self._schedule_auto_focus_resample(160)
         elif self.focus_mode:
             self._focus_geometry_dirty = True
@@ -2947,6 +2959,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "save_timer"):
             self.schedule_save()
         if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
             self._schedule_auto_focus_resample(160)
         elif self.focus_mode:
             self._focus_geometry_dirty = True
