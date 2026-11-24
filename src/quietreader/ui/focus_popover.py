@@ -29,6 +29,7 @@ class FocusPopover(FloatingPopover):
 
     settings_changed = Signal(object)
     enter_focus_requested = Signal()
+    enter_moyu_requested = Signal()
     resample_requested = Signal()
     eyedropper_requested = Signal()
     more_settings_requested = Signal()
@@ -150,6 +151,9 @@ class FocusPopover(FloatingPopover):
         self.enter_focus_button.clicked.connect(self._on_enter_focus)
         outer.addWidget(self.enter_focus_button)
 
+        self.enter_moyu_button = self._action_btn("进入摸鱼模式", self._on_enter_moyu, self)
+        outer.addWidget(self.enter_moyu_button)
+
         # Divider + footer
         sep = QFrame(self)
         sep.setObjectName("popoverDivider")
@@ -247,6 +251,12 @@ class FocusPopover(FloatingPopover):
         self.enter_focus_button.setToolTip(
             "" if self._has_book else tr("请先打开一本书籍再进入专注模式", self._language)
         )
+        self.enter_moyu_button.setText(tr("进入摸鱼模式 ({key})", self._language, key=settings.moyu_key))
+        self.enter_moyu_button.setEnabled(self._has_book)
+        self.enter_moyu_button.setToolTip(
+            tr("鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动可调整位置。", self._language)
+            if self._has_book else tr("请先打开一本书籍再进入摸鱼模式", self._language)
+        )
         self.live_note.setText(tr("滑块松开后应用", self._language))
         self.more_button.setText(f"{tr('更多配置', self._language)} →")
 
@@ -319,6 +329,12 @@ class FocusPopover(FloatingPopover):
             return
         self.dismiss()
         self.enter_focus_requested.emit()
+
+    def _on_enter_moyu(self):
+        if not self._has_book:
+            return
+        self.dismiss()
+        self.enter_moyu_requested.emit()
 
     def _open_more(self):
         self.dismiss()

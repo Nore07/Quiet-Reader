@@ -107,6 +107,11 @@ class Settings:
     focus_opacity_key: str = "F9"
     focus_resample_key: str = "F8"
     focus_adjust_key: str = "Alt"
+    moyu_key: str = "Ctrl+Alt+M"
+    moyu_previous_key: str = "Ctrl+Alt+Shift+Up"
+    moyu_next_key: str = "Ctrl+Alt+Shift+Down"
+    moyu_lines_key: str = "Ctrl+Alt+Shift+L"
+    moyu_lines: int = 2
     auto_check_updates: bool = False
     focus_auto_background: bool = False
     focus_sample_trigger: str = "auto"
@@ -121,6 +126,7 @@ class Settings:
             ("padding", 12, 72, int), ("letter_spacing", 0, 5, float),
             ("paragraph_spacing", 0, 40, int), ("opacity", 0, 1, float),
             ("focus_complex_opacity", 0, 1, float),
+            ("moyu_lines", 1, 2, int),
         ]:
             try:
                 value = float(raw.get(key, getattr(result, key)))
