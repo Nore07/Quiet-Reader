@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QTextLayout, QTextOption
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
 
 from quietreader.i18n import tr
 from quietreader.ui.theme import colors
@@ -75,6 +75,11 @@ def sentence_index_for_offset(spans: list[tuple[int, int]], offset: int) -> int:
 class MoyuStrip(QWidget):
     """A focus-preserving, one- or two-line strip with sentence navigation."""
 
+    SINGLE_LINE_HEIGHT = 30
+    DOUBLE_LINE_HEIGHT = 42
+    MAXIMUM_HEIGHT = 88
+    EDGE_MARGIN = 7
+
     turn_requested = Signal(int)
     toggle_lines_requested = Signal()
     exit_requested = Signal()
@@ -84,22 +89,37 @@ class MoyuStrip(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._sentence = ""
-        self._line_count = 2
+        self._line_count = 1
         self._language = "system"
         self._theme = "system"
         self._background_color = ""
         self._palette = colors("system")
         self._font_family = "Microsoft YaHei"
-        self._drag_offset = None
+        self._drag_state = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self.setAccessibleName(tr("摸鱼模式阅读条", self._language))
-        self.setToolTip(tr("鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动可调整位置。", self._language))
+        self.setToolTip(self._interaction_hint(self._language))
         self._sync_height()
 
     @property
     def line_count(self):
         return self._line_count
+
+    @property
+    def preferred_height(self):
+        return self.SINGLE_LINE_HEIGHT if self._line_count == 1 else self.DOUBLE_LINE_HEIGHT
+
+    @property
+    def interaction_active(self):
+        return self._drag_state is not None
+
+    @staticmethod
+    def _interaction_hint(language):
+        return tr(
+            "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动移动；拖动边缘或角落调整大小。",
+            language,
+        )
 
     def set_preferences(
         self, *, lines: int, theme: str, language: str, font_family: str, background_color="",
@@ -111,7 +131,7 @@ class MoyuStrip(QWidget):
         self._background_color = background_color or ""
         self._palette = colors(theme, self._background_color)
         self.setAccessibleName(tr("摸鱼模式阅读条", language))
-        self.setToolTip(tr("鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动可调整位置。", language))
+        self.setToolTip(self._interaction_hint(language))
         self._sync_height()
         self.update()
 
@@ -130,11 +150,14 @@ class MoyuStrip(QWidget):
         self.update()
 
     def set_hotkey_tooltip(self, message: str):
-        hint = tr("鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动可调整位置。", self._language)
+        hint = self._interaction_hint(self._language)
         self.setToolTip(f"{hint}\n{message}" if message else hint)
 
     def _sync_height(self):
-        self.setFixedHeight(26 if self._line_count == 1 else 42)
+        minimum_height = self.preferred_height
+        self.setMinimumHeight(minimum_height)
+        self.setMaximumHeight(self.MAXIMUM_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -187,27 +210,139 @@ class MoyuStrip(QWidget):
         self.turn_requested.emit(-1 if delta > 0 else 1)
         event.accept()
 
+    def _resize_edges_at(self, position):
+        edges = Qt.Edge(0)
+        if position.x() < self.EDGE_MARGIN:
+            edges |= Qt.Edge.LeftEdge
+        elif position.x() >= self.width() - self.EDGE_MARGIN:
+            edges |= Qt.Edge.RightEdge
+        if position.y() < self.EDGE_MARGIN:
+            edges |= Qt.Edge.TopEdge
+        elif position.y() >= self.height() - self.EDGE_MARGIN:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _resize_cursor(edges):
+        left = bool(edges & Qt.Edge.LeftEdge)
+        right = bool(edges & Qt.Edge.RightEdge)
+        top = bool(edges & Qt.Edge.TopEdge)
+        bottom = bool(edges & Qt.Edge.BottomEdge)
+        if (top and left) or (bottom and right):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (top and right) or (bottom and left):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def _resize_window(self, global_position, origin, geometry, edges):
+        dx = global_position.x() - origin.x()
+        dy = global_position.y() - origin.y()
+        left, top = geometry.x(), geometry.y()
+        width, height = geometry.width(), geometry.height()
+        minimum_width = self.window().minimumWidth()
+        minimum_height = self.window().minimumHeight()
+
+        if edges & Qt.Edge.LeftEdge:
+            left += dx
+            width -= dx
+            if width < minimum_width:
+                left -= minimum_width - width
+                width = minimum_width
+        elif edges & Qt.Edge.RightEdge:
+            width = max(minimum_width, width + dx)
+
+        if edges & Qt.Edge.TopEdge:
+            top += dy
+            height -= dy
+            if height < minimum_height:
+                top -= minimum_height - height
+                height = minimum_height
+        elif edges & Qt.Edge.BottomEdge:
+            height = max(minimum_height, height + dy)
+
+        screen = self.window().screen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            fixed_right = geometry.x() + geometry.width() - 1
+            fixed_bottom = geometry.y() + geometry.height() - 1
+            if edges & Qt.Edge.LeftEdge:
+                left = max(area.left(), min(left, fixed_right - minimum_width + 1))
+                width = fixed_right - left + 1
+            else:
+                width = min(width, area.right() - left + 1)
+            if edges & Qt.Edge.TopEdge:
+                top = max(area.top(), min(top, fixed_bottom - minimum_height + 1))
+                height = fixed_bottom - top + 1
+            else:
+                height = min(height, area.bottom() - top + 1)
+
+        maximum_width = self.window().maximumWidth()
+        maximum_height = self.window().maximumHeight()
+        if width > maximum_width:
+            if edges & Qt.Edge.LeftEdge:
+                left += width - maximum_width
+            width = maximum_width
+        if height > maximum_height:
+            if edges & Qt.Edge.TopEdge:
+                top += height - maximum_height
+            height = maximum_height
+
+        self.window().setGeometry(left, top, width, height)
+
+    def cancel_interaction(self):
+        self._drag_state = None
+        self.unsetCursor()
+
     def mousePressEvent(self, event):
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and event.modifiers() & Qt.KeyboardModifier.AltModifier
-        ):
+        if event.button() == Qt.MouseButton.LeftButton:
             global_position = event.globalPosition().toPoint()
-            self._drag_offset = global_position - self.window().frameGeometry().topLeft()
-            event.accept()
-            return
+            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                self._drag_state = {
+                    "kind": "move",
+                    "origin": global_position,
+                    "offset": global_position - self.window().frameGeometry().topLeft(),
+                }
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                event.accept()
+                return
+            edges = self._resize_edges_at(event.position().toPoint())
+            if edges:
+                self._drag_state = {
+                    "kind": "resize",
+                    "origin": global_position,
+                    "geometry": self.window().geometry(),
+                    "edges": edges,
+                }
+                self.setCursor(self._resize_cursor(edges))
+                event.accept()
+                return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.window().move(event.globalPosition().toPoint() - self._drag_offset)
+        if self._drag_state is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            global_position = event.globalPosition().toPoint()
+            if self._drag_state["kind"] == "move":
+                self.window().move(global_position - self._drag_state["offset"])
+            else:
+                self._resize_window(
+                    global_position,
+                    self._drag_state["origin"],
+                    self._drag_state["geometry"],
+                    self._drag_state["edges"],
+                )
             event.accept()
             return
+        if event.buttons() == Qt.MouseButton.NoButton:
+            self.setCursor(self._resize_cursor(self._resize_edges_at(event.position().toPoint())))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._drag_offset is not None:
-            self._drag_offset = None
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_state is not None:
+            self.cancel_interaction()
             event.accept()
             return
         super().mouseReleaseEvent(event)

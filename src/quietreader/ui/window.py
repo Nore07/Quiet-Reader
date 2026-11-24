@@ -294,6 +294,7 @@ class MainWindow(QMainWindow):
         self.moyu_mode = False
         self._moyu_return_to_focus = False
         self._moyu_geometry = None
+        self._moyu_previous_maximum_size = None
         self._moyu_was_maximized = False
         self._moyu_sentences = []
         self._moyu_sentence_index = -1
@@ -2149,15 +2150,15 @@ class MainWindow(QMainWindow):
         if screen is None:
             return
         area = screen.availableGeometry()
-        height = self.moyu_strip.height()
         current = self.geometry()
         if default or not area.contains(current):
-            width = min(area.width() - 20, max(420, int(area.width() * 0.66)))
-            width = max(180, width)
+            width = max(180, min(500, area.width() - 16))
+            height = self.moyu_strip.preferred_height
             x = area.x() + 8
-            y = area.y() + area.height() - height
+            y = area.bottom() - height + 1
         else:
             width = min(current.width(), area.width() - 20)
+            height = max(current.height(), self.moyu_strip.minimumHeight())
             x = max(area.x(), min(current.x(), area.right() - width + 1))
             bottom = current.y() + current.height()
             y = max(area.y(), min(bottom - height, area.bottom() - height + 1))
@@ -2169,6 +2170,9 @@ class MainWindow(QMainWindow):
     def _sync_moyu_visibility(self, initial=False):
         if not self.moyu_mode:
             self._moyu_visibility_timer.stop()
+            self._moyu_hide_timer.stop()
+            return
+        if self.moyu_strip.interaction_active:
             self._moyu_hide_timer.stop()
             return
         if self._moyu_menu_open:
@@ -2197,7 +2201,7 @@ class MainWindow(QMainWindow):
         self._sync_moyu_visibility()
 
     def _hide_moyu_if_away(self):
-        if self.moyu_mode and not self._moyu_pointer_is_near():
+        if self.moyu_mode and not self.moyu_strip.interaction_active and not self._moyu_pointer_is_near():
             self._moyu_auto_hidden = True
             self.hide()
 
@@ -2229,7 +2233,9 @@ class MainWindow(QMainWindow):
         self._moyu_menu_open = False
         self.reader.hide()
         self.moyu_strip.show()
-        self.setMinimumSize(180, 26)
+        self._moyu_previous_maximum_size = QSize(self.maximumSize())
+        self.setMinimumSize(180, self.moyu_strip.minimumHeight())
+        self.setMaximumHeight(self.moyu_strip.MAXIMUM_HEIGHT)
         self.reader.setMinimumSize(0, 0)
         self._refresh_moyu_sentence(self.reader.offset)
         self.apply_settings(self.settings)
@@ -2253,6 +2259,9 @@ class MainWindow(QMainWindow):
         self.moyu_mode = False
         self.moyu_strip.hide()
         self.reader.show()
+        if self._moyu_previous_maximum_size is not None:
+            self.setMaximumSize(self._moyu_previous_maximum_size)
+            self._moyu_previous_maximum_size = None
         self.setMinimumSize(180 if self.focus_mode else 380, 100 if self.focus_mode else 360)
         self.reader.setMinimumSize(80 if self.focus_mode else 160, 40 if self.focus_mode else 140)
         if self.isMaximized():
@@ -2597,6 +2606,9 @@ class MainWindow(QMainWindow):
             font_family=settings.font_family,
             background_color=self._sampled_focus_color if self.moyu_mode else "",
         )
+        if self.moyu_mode:
+            self.setMinimumSize(180, self.moyu_strip.minimumHeight())
+            self.setMaximumHeight(self.moyu_strip.MAXIMUM_HEIGHT)
         self._reader_settings_dirty = False
         self._sync_page_navigation()
         focus_popover_open = hasattr(self, "focus_popover") and not self.focus_popover.isHidden()
@@ -3077,6 +3089,8 @@ class MainWindow(QMainWindow):
         event_type = event.type()
         if event_type == QEvent.Type.ApplicationDeactivate or (event_type == QEvent.Type.WindowDeactivate and watched is self):
             self._set_focus_adjust_active(False)
+            if hasattr(self, "moyu_strip"):
+                self.moyu_strip.cancel_interaction()
             self._drag_has_valid = False
             self._set_drag_hover_active(False)
             return False

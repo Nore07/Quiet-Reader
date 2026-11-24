@@ -111,7 +111,7 @@ class Settings:
     moyu_previous_key: str = "Ctrl+Alt+Shift+Up"
     moyu_next_key: str = "Ctrl+Alt+Shift+Down"
     moyu_lines_key: str = "Ctrl+Alt+Shift+L"
-    moyu_lines: int = 2
+    moyu_lines: int = 1
     auto_check_updates: bool = False
     focus_auto_background: bool = False
     focus_sample_trigger: str = "auto"
