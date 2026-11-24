@@ -303,6 +303,7 @@ class MainWindow(QMainWindow):
         self._moyu_fragment_history = []
         self._moyu_preserve_external_focus = False
         self._moyu_auto_hidden = False
+        self._moyu_auto_hide_armed = False
         self._moyu_menu_open = False
         self.sidebar_collapsed = False
         self._user_sidebar_collapsed = False
@@ -2212,16 +2213,17 @@ class MainWindow(QMainWindow):
             return
         if self._moyu_pointer_is_near():
             self._moyu_hide_timer.stop()
+            self._moyu_auto_hide_armed = True
             if self._moyu_auto_hidden:
                 self._moyu_auto_hidden = False
                 self.show()
                 self._configure_hotkeys()
                 self._schedule_auto_focus_resample(140)
             return
-        if initial:
-            self._moyu_auto_hidden = True
-            self.hide()
-        elif not self._moyu_auto_hidden and not self._moyu_hide_timer.isActive():
+        if initial or not self._moyu_auto_hide_armed:
+            self._moyu_hide_timer.stop()
+            return
+        if not self._moyu_auto_hidden and not self._moyu_hide_timer.isActive():
             self._moyu_hide_timer.start()
 
     def _on_moyu_menu_opened(self):
@@ -2260,6 +2262,8 @@ class MainWindow(QMainWindow):
         self._focus_resample_timer.stop()
         self._focus_geometry_dirty = False
         self.moyu_mode = True
+        self._moyu_auto_hidden = False
+        self._moyu_auto_hide_armed = False
         self._sampled_focus_color = ""
         self._sampled_focus_complex = False
         self._moyu_menu_open = False
@@ -2290,6 +2294,7 @@ class MainWindow(QMainWindow):
         self._moyu_visibility_timer.stop()
         self._moyu_hide_timer.stop()
         self._moyu_auto_hidden = False
+        self._moyu_auto_hide_armed = False
         self._moyu_preserve_external_focus = True
         self.moyu_mode = False
         self.moyu_strip.hide()
@@ -2959,6 +2964,7 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if self.moyu_mode and not self._moyu_visibility_timer.isActive():
             self._moyu_auto_hidden = False
+            self._moyu_auto_hide_armed = False
             self._moyu_visibility_timer.start()
             QTimer.singleShot(0, lambda: self._sync_moyu_visibility(initial=True))
         self._configure_hotkeys()
