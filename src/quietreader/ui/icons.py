@@ -37,6 +37,9 @@ def _draw_icon(painter: QPainter, name: str):
     elif name == "back":
         painter.drawLine(QPointF(14.5, 6), QPointF(8.5, 12))
         painter.drawLine(QPointF(8.5, 12), QPointF(14.5, 18))
+    elif name == "chevron_up":
+        painter.drawLine(QPointF(6.5, 14.5), QPointF(12, 9))
+        painter.drawLine(QPointF(12, 9), QPointF(17.5, 14.5))
     elif name == "chevron_down":
         painter.drawLine(QPointF(6.5, 9.5), QPointF(12, 15))
         painter.drawLine(QPointF(12, 15), QPointF(17.5, 9.5))
