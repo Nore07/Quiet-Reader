@@ -26,6 +26,10 @@ Use the sidebar to switch between contents, bookmarks, and book info. Click the 
 
 Use the desktop color picker under **Configuration → Focus & window** to sample a background color. You can also set the background opacity and text color there. Press `F10` to enter Focus mode and hide the reader controls. Hold the default adjustment key, `Alt`, to drag the window or resize it from an edge. Release the key to hide the outline, or press `Esc` to return to the regular reading view.
 
+![The Focus popover showing automatic edge-color sampling, trigger options, and opacity controls](docs/screenshots/focus-popover-auto-background.png)
+
+The Focus popover can automatically sample the color around the window and shows the sampled color and trigger mode. For complex backgrounds, set an opacity cap. Slider values update during dragging, while the reading page updates once after release.
+
 ### Bookshelf
 
 ![Bookshelf cover grid with Recently read, All books, and custom categories on the left](docs/screenshots/bookshelf.png)
@@ -101,7 +105,7 @@ Enable global shortcuts under Configuration → Shortcuts. While the window is v
 
 ## Download and run
 
-**Download the app:** [QuietReader 0.1.6 for Windows x64](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip) ([SHA-256 checksum](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.6/QuietReader-0.1.6-Windows-x64.zip.sha256)) is available on [GitHub Releases](https://github.com/Nore07/Quiet-Reader/releases). The archive does not include personal settings or books. After extraction, run `QuietReader.exe`; it creates a `data\` folder beside the executable. Keep all files in the extracted directory while running the app.
+**Download the latest release:** [Open the latest GitHub Release](https://github.com/Nore07/Quiet-Reader/releases/latest) to choose the Windows x64 portable ZIP or installer; matching SHA-256 checksum files are listed on the same page. This link follows the latest published release, so the README does not need a version number update. The archive does not include personal settings or books. After extraction, run `QuietReader.exe`; it creates a `data\` folder beside the executable. Keep all files in the extracted directory while running the app.
 
 **Use the installer**
 
