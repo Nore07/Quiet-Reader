@@ -1,7 +1,7 @@
 """Minimal status-bar-like reader surface used by Moyu mode."""
 
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QTextLayout, QTextOption
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QTextLayout, QTextOption
 from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
 
 from quietreader.i18n import tr
@@ -128,7 +128,7 @@ class MoyuStrip(QWidget):
     @staticmethod
     def _interaction_hint(language):
         return tr(
-            "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动移动；拖动边缘或角落调整大小。",
+            "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 并拖动可移动，按住 Alt 拖动边缘或角落可调整大小。",
             language,
         )
 
@@ -317,33 +317,43 @@ class MoyuStrip(QWidget):
         self._drag_state = None
         self.unsetCursor()
 
+    @staticmethod
+    def _alt_is_pressed(event=None):
+        if event is not None and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            return True
+        return bool(QGuiApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._alt_is_pressed(event):
+            window = self.window()
             global_position = event.globalPosition().toPoint()
             edges = self._resize_edges_at(event.position().toPoint())
             if edges:
                 self._drag_state = {
                     "kind": "resize",
                     "origin": global_position,
-                    "geometry": self.window().geometry(),
+                    "geometry": window.geometry(),
                     "edges": edges,
                 }
                 self.setCursor(self._resize_cursor(edges))
                 event.accept()
                 return
-            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
-                self._drag_state = {
-                    "kind": "move",
-                    "origin": global_position,
-                    "offset": global_position - self.window().frameGeometry().topLeft(),
-                }
-                self.setCursor(Qt.CursorShape.SizeAllCursor)
-                event.accept()
-                return
+            self._drag_state = {
+                "kind": "move",
+                "origin": global_position,
+                "offset": global_position - window.frameGeometry().topLeft(),
+            }
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._drag_state is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if not self._alt_is_pressed(event):
+                self.cancel_interaction()
+                event.accept()
+                return
             global_position = event.globalPosition().toPoint()
             if self._drag_state["kind"] == "move":
                 self.window().move(global_position - self._drag_state["offset"])
@@ -357,7 +367,11 @@ class MoyuStrip(QWidget):
             event.accept()
             return
         if event.buttons() == Qt.MouseButton.NoButton:
-            self.setCursor(self._resize_cursor(self._resize_edges_at(event.position().toPoint())))
+            if self._alt_is_pressed(event):
+                edges = self._resize_edges_at(event.position().toPoint())
+                self.setCursor(self._resize_cursor(edges) if edges else Qt.CursorShape.SizeAllCursor)
+            else:
+                self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):

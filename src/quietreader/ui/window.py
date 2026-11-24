@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
         self._focus_resample_timer.setSingleShot(True)
         self._focus_resample_timer.setInterval(140)
         self._focus_resample_timer.timeout.connect(self._run_scheduled_focus_resample)
+        self._focus_resample_pending = False
         self._moyu_visibility_timer = QTimer(self)
         self._moyu_visibility_timer.setInterval(80)
         self._moyu_visibility_timer.timeout.connect(self._sync_moyu_visibility)
@@ -2039,7 +2040,6 @@ class MainWindow(QMainWindow):
     def _run_scheduled_focus_resample(self):
         if (
             not self.focus_mode
-            or self._focus_adjust_active
             or (
                 not self.moyu_mode
                 and (
@@ -2051,6 +2051,10 @@ class MainWindow(QMainWindow):
             or self._window_hidden
         ):
             return
+        if self._focus_adjust_active:
+            self._focus_resample_pending = True
+            return
+        self._focus_resample_pending = False
         self.resample_focus_background(notify=False, force_enable=False)
 
     def show_focus_panel(self):
@@ -2090,6 +2094,7 @@ class MainWindow(QMainWindow):
             self._pre_focus_maximized = self.isMaximized()
             self._chrome_visibility = {widget: not widget.isHidden() for widget in self.chrome_widgets}
         self._focus_resample_timer.stop()
+        self._focus_resample_pending = False
         self._focus_geometry_dirty = False
         self._set_focus_adjust_active(False)
         self._focus_adjust_mouse_drag_active = False
@@ -2195,6 +2200,10 @@ class MainWindow(QMainWindow):
             self._moyu_visibility_timer.stop()
             self._moyu_hide_timer.stop()
             return
+        alt_pressed = bool(QGuiApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        self._set_focus_adjust_active(alt_pressed)
+        if self.moyu_strip.interaction_active and not alt_pressed:
+            self.moyu_strip.cancel_interaction()
         if self.moyu_strip.interaction_active:
             self._moyu_hide_timer.stop()
             return
@@ -2207,6 +2216,7 @@ class MainWindow(QMainWindow):
                 self._moyu_auto_hidden = False
                 self.show()
                 self._configure_hotkeys()
+                self._schedule_auto_focus_resample(140)
             return
         if initial:
             self._moyu_auto_hidden = True
@@ -2275,6 +2285,8 @@ class MainWindow(QMainWindow):
         previous_geometry = QRect(self._moyu_geometry) if self._moyu_geometry is not None else None
         was_maximized = self._moyu_was_maximized
         self.save_state()
+        self._set_focus_adjust_active(False)
+        self.moyu_strip.cancel_interaction()
         self._moyu_visibility_timer.stop()
         self._moyu_hide_timer.stop()
         self._moyu_auto_hidden = False
@@ -2530,7 +2542,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(stylesheet(
             palette, alpha,
             borderless=self.focus_mode or self.moyu_mode,
-            resize_outline=self.focus_mode and not self.moyu_mode and self._focus_adjust_active,
+            resize_outline=(self.focus_mode or self.moyu_mode) and self._focus_adjust_active,
             drop_highlight=self._drag_hover_active and not self.focus_mode,
         ))
         if hasattr(self, "brand_mark"):
@@ -2863,9 +2875,12 @@ class MainWindow(QMainWindow):
 
     def reveal(self):
         if self.moyu_mode:
+            was_hidden = self.isHidden() or self.isMinimized()
             bar_geometry = QRect(self._moyu_bar_geometry or self.geometry())
             self.showNormal()
             self.setGeometry(bar_geometry)
+            if was_hidden:
+                self._schedule_auto_focus_resample(140)
             return
         self._screen_removed()
         self.showNormal()
@@ -3038,22 +3053,23 @@ class MainWindow(QMainWindow):
         return Qt.CursorShape.ArrowCursor
 
     def _set_focus_adjust_active(self, active):
-        active = bool(active and self.focus_mode)
+        active = bool(active and (self.focus_mode or self.moyu_mode))
         if active == self._focus_adjust_active:
             return
         self._focus_adjust_active = active
         self._focus_adjust_drag = None
         self._focus_system_drag_active = False
         if active:
-            self._focus_resample_timer.stop()
-            QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
-            self._focus_cursor_override = True
+            if not self.moyu_mode:
+                QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
+                self._focus_cursor_override = True
         elif self._focus_cursor_override:
             QApplication.restoreOverrideCursor()
             self._focus_cursor_override = False
         self._apply_window_style()
-        if not active and self.focus_mode and self._focus_geometry_dirty:
+        if not active and self.focus_mode and (self._focus_geometry_dirty or self._focus_resample_pending):
             self._focus_geometry_dirty = False
+            self._focus_resample_pending = False
             self._schedule_auto_focus_resample(90)
 
     def _update_focus_adjust_cursor(self, global_position):

@@ -85,7 +85,7 @@ EN = {
     "专注模式": "Focus mode",
     "摸鱼模式": "Moyu mode",
     "摸鱼模式阅读条": "Moyu mode reading strip",
-    "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 拖动可调整位置。": "The strip appears when the pointer approaches and hides after it leaves. Scroll one sentence at a time; hold Alt and drag to reposition.",
+    "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 并拖动可移动，按住 Alt 拖动边缘或角落可调整大小。": "The strip appears when the pointer approaches and hides after it leaves. Scroll one sentence at a time; hold Alt and drag to move it, or hold Alt and drag an edge or corner to resize.",
     "点击按键即可重新录入；摸鱼模式开启期间，模式热键全局生效。": "Click a key to rebind it. Moyu mode shortcuts work globally while the mode is active.",
     "上一句": "Previous sentence",
     "下一句": "Next sentence",
