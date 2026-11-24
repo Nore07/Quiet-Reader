@@ -2525,11 +2525,14 @@ class MainWindow(QMainWindow):
         if self.focus_mode or self.moyu_mode:
             if self._focus_adjust_active and opacity == 0 and not self.moyu_mode:
                 # A fully transparent surface can miss mouse input. Make only
-                # that case hit-testable while Alt is held; preserve every
-                # already-visible opacity and restore zero on key release.
+                # that case more reliably hit-testable while Alt is held.
                 alpha = 255 * 0.01
             else:
                 alpha = round(opacity * 255)
+            if self.focus_mode and not self.moyu_mode:
+                # Keep the full focus-window rectangle hit-testable for wheel
+                # paging even when its background is visually transparent.
+                alpha = max(1, alpha)
         else:
             alpha = 255
         effective_bg = self._effective_focus_background()

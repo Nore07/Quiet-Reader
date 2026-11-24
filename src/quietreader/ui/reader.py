@@ -223,6 +223,14 @@ class PageView(QWidget):
         super().resizeEvent(event)
         self.reflow()
 
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y() or event.pixelDelta().y()
+        if not delta:
+            event.ignore()
+            return
+        self.turned.emit(-1 if delta > 0 else 1)
+        event.accept()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
