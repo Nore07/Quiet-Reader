@@ -44,6 +44,14 @@ from quietreader.library.shelf import SUPPORTED_SUFFIXES, ShelfError, ShelfManag
 from quietreader.ui.shelf import ShelfPanel, display_title_for_record
 from quietreader.updates import ReleaseChecker, automatic_check_due
 
+_SETTINGS_SLIDER_FIELDS = frozenset({
+    "font_size", "line_height", "letter_spacing", "paragraph_spacing", "padding",
+    "opacity", "focus_complex_opacity",
+})
+_READER_LAYOUT_SETTINGS_FIELDS = frozenset({
+    "font_size", "line_height", "letter_spacing", "paragraph_spacing", "padding",
+})
+
 
 def classify_dropped_urls(urls, max_items=MAX_BOOK_RECORDS):
     """Split dropped URLs into valid local book paths and skipped unsupported entries."""
@@ -271,6 +279,7 @@ class MainWindow(QMainWindow):
         self.store = store
         self.shelf_manager = ShelfManager(store.path.parent)
         self.settings = Settings.from_dict(store.state["settings"])
+        self._reader_settings_dirty = False
         self.enable_system = enable_system
         self.book = None
         self.section_index = 0
@@ -1837,6 +1846,9 @@ class MainWindow(QMainWindow):
     def show_reading_page(self, checked=False):
         if self.focus_mode:
             return
+        if self._reader_settings_dirty:
+            self.reader.apply_settings(self.settings)
+            self._reader_settings_dirty = False
         self.main_pages.setCurrentWidget(self.reader_page)
         self._sync_page_navigation()
 
@@ -2254,10 +2266,28 @@ class MainWindow(QMainWindow):
             )
 
     def apply_settings(self, settings):
-        previously_enabled = self.settings.auto_check_updates
-        prev_auto = self.settings.focus_auto_background
+        previous_settings = self.settings
+        previous_values = previous_settings.to_dict()
+        previously_enabled = previous_settings.auto_check_updates
+        prev_auto = previous_settings.focus_auto_background
         self.settings = Settings.from_dict(settings.to_dict())
         settings = self.settings
+        updated_values = settings.to_dict()
+        changed_fields = {
+            key for key, value in updated_values.items()
+            if previous_values.get(key) != value
+        }
+        # The settings page hides the reader; defer layout work until it is shown again.
+        if (
+            changed_fields
+            and changed_fields.issubset(_SETTINGS_SLIDER_FIELDS)
+            and hasattr(self, "settings_page")
+            and self.main_pages.currentWidget() is self.settings_page
+        ):
+            if changed_fields & _READER_LAYOUT_SETTINGS_FIELDS:
+                self._reader_settings_dirty = True
+            self.schedule_save()
+            return
         if settings.auto_check_updates and not previously_enabled:
             QTimer.singleShot(0, self.check_for_updates_automatically)
         if (
@@ -2286,6 +2316,7 @@ class MainWindow(QMainWindow):
         self._apply_window_style()
         self.pin_button.setChecked(settings.always_on_top)
         self.reader.apply_settings(settings)
+        self._reader_settings_dirty = False
         self._sync_page_navigation()
         focus_popover_open = hasattr(self, "focus_popover") and not self.focus_popover.isHidden()
         self.focus_button.setChecked(self.focus_mode or focus_popover_open)
