@@ -130,11 +130,15 @@ class FocusPopover(FloatingPopover):
         body.addLayout(action_row)
 
         # Row 4: Focus background opacity & complex-background opacity cap sliders
-        self.opacity_slider = _SliderControl("背景不透明度", 0, 100, 1, "%", 0, content)
+        self.opacity_slider = _SliderControl(
+            "背景不透明度", 0, 100, 1, "%", 0, content, commit_on_release=True
+        )
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         body.addWidget(self.opacity_slider)
 
-        self.complex_opacity_slider = _SliderControl("复杂背景不透明度上限", 0, 100, 1, "%", 0, content)
+        self.complex_opacity_slider = _SliderControl(
+            "复杂背景不透明度上限", 0, 100, 1, "%", 0, content, commit_on_release=True
+        )
         self.complex_opacity_slider.valueChanged.connect(self._on_complex_opacity_changed)
         body.addWidget(self.complex_opacity_slider)
 
@@ -154,7 +158,7 @@ class FocusPopover(FloatingPopover):
 
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 2, 0, 0)
-        self.live_note = QLabel("调整即刻生效", self)
+        self.live_note = QLabel("滑块松开后应用", self)
         self.live_note.setObjectName("status")
         self.more_button = QPushButton("更多配置 →", self)
         self.more_button.setObjectName("popoverLink")
@@ -243,7 +247,7 @@ class FocusPopover(FloatingPopover):
         self.enter_focus_button.setToolTip(
             "" if self._has_book else tr("请先打开一本书籍再进入专注模式", self._language)
         )
-        self.live_note.setText(tr("调整即刻生效", self._language))
+        self.live_note.setText(tr("滑块松开后应用", self._language))
         self.more_button.setText(f"{tr('更多配置', self._language)} →")
 
         self._syncing = False
