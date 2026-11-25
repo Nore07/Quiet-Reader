@@ -1,7 +1,7 @@
 from bisect import bisect_left, bisect_right
 import math
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, QSizeF, Qt, Signal, QUrl
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, QSizeF, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout, QColor, QFont, QGuiApplication, QKeySequence,
     QPainter, QPalette, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QImageReader,
@@ -80,6 +80,10 @@ class PageView(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._resize_reflow_timer = QTimer(self)
+        self._resize_reflow_timer.setSingleShot(True)
+        self._resize_reflow_timer.setInterval(160)
+        self._resize_reflow_timer.timeout.connect(self.reflow)
         self.settings = Settings()
         self.focus_mode = False
         self.focus_background_override = ""
@@ -131,6 +135,7 @@ class PageView(QWidget):
         return loaded
 
     def set_text(self, text: str, offset=0, images=None, links=None, formats=None):
+        self._resize_reflow_timer.stop()
         self.text = text
         self._offset_map = _TextOffsetMap(text)
         self.offset = max(0, min(len(text), offset))
@@ -163,6 +168,7 @@ class PageView(QWidget):
         return self.focus_background_override or self.settings.background_color
 
     def apply_settings(self, settings):
+        self._resize_reflow_timer.stop()
         self.settings = settings
         self.reflow()
 
@@ -378,7 +384,7 @@ class PageView(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.reflow()
+        self._resize_reflow_timer.start()
 
     def paintEvent(self, event):
         painter = QPainter(self)

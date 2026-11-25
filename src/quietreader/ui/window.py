@@ -175,7 +175,11 @@ class _SearchResultModel(QAbstractListModel):
         self.owner = owner
         self.book = None
         self.matches: list[tuple[int, int, int]] = []
-        self._entries: dict[int, tuple[str, int, tuple[str, str, str, bool, bool]]] = {}
+        self._entries: dict[int, tuple[str, tuple[str, str, str, bool, bool]]] = {}
+        self._pages: dict[int, int | None] = {}
+        self._page_queue: list[int] = []
+        self._pending_pages: set[int] = set()
+        self._page_task_scheduled = False
         self._section_page_counts: dict[int, int] = {}
         self._chapter_starts: dict[int, tuple[int, str]] = {}
         self._section_page_offsets: dict[int, int] = {}
@@ -186,18 +190,23 @@ class _SearchResultModel(QAbstractListModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self.matches):
             return None
-        chapter, page, snippet = self._entry(index.row())
+        row = index.row()
+        chapter, snippet = self._entry(row)
+        page = self._pages.get(row)
+        page_label = self.owner.t("第 {page} 页", page=page) if page is not None else "…"
         if role == Qt.ItemDataRole.DisplayRole:
             before, match, after, clipped_left, clipped_right = snippet
             prefix = "…" if clipped_left else ""
             suffix = "…" if clipped_right else ""
             return (
-                f"{chapter} · {self.owner.t('第 {page} 页', page=page)}\n"
+                f"{chapter} · {page_label}\n"
                 f"{prefix}{before}{match}{after}{suffix}"
             )
         if role == _SEARCH_CHAPTER_ROLE:
             return chapter
         if role == _SEARCH_PAGE_ROLE:
+            if row not in self._pages:
+                self._schedule_page(row)
             return page
         if role == _SEARCH_SNIPPET_ROLE:
             return snippet
@@ -206,7 +215,7 @@ class _SearchResultModel(QAbstractListModel):
             prefix = "…" if clipped_left else ""
             suffix = "…" if clipped_right else ""
             return (
-                f"{chapter} · {self.owner.t('第 {page} 页', page=page)}\n"
+                f"{chapter} · {page_label}\n"
                 f"{prefix}{before}{match}{after}{suffix}"
             )
         return None
@@ -216,6 +225,9 @@ class _SearchResultModel(QAbstractListModel):
         self.book = book
         self.matches = matches
         self._entries.clear()
+        self._pages.clear()
+        self._page_queue.clear()
+        self._pending_pages.clear()
         self._section_page_counts.clear()
         self._chapter_starts.clear()
         self._section_page_offsets.clear()
@@ -223,9 +235,56 @@ class _SearchResultModel(QAbstractListModel):
 
     def invalidate_pages(self):
         self._entries.clear()
+        self._pages.clear()
+        self._page_queue.clear()
+        self._pending_pages.clear()
         self._section_page_counts.clear()
         self._chapter_starts.clear()
         self._section_page_offsets.clear()
+
+    def _schedule_page(self, row: int):
+        if row in self._pages or row in self._pending_pages:
+            return
+        self._pending_pages.add(row)
+        self._page_queue.append(row)
+        if not self._page_task_scheduled:
+            self._page_task_scheduled = True
+            QTimer.singleShot(0, self._compute_next_page)
+
+    def _compute_next_page(self):
+        self._page_task_scheduled = False
+        if not self._page_queue or not self.book:
+            return
+        row = self._page_queue.pop(0)
+        if not 0 <= row < len(self.matches):
+            self._pending_pages.discard(row)
+        else:
+            model_index = self.index(row, 0)
+            view = self.owner.search_results
+            if not view.isVisible() or not view.visualRect(model_index).intersects(view.viewport().rect()):
+                self._pending_pages.discard(row)
+            else:
+                section_index, start, _end = self.matches[row]
+                section = self.book.sections[section_index]
+                chapter_start, _chapter = self._chapter_start(section_index)
+                try:
+                    ready = self._advance_chapter_page_offset(section_index, chapter_start)
+                    if ready:
+                        page_offset = self._section_page_offsets[section_index]
+                        self._pages[row] = page_offset + self.owner.reader.page_for_section_offset(section, start)
+                        self._pending_pages.discard(row)
+                        self.dataChanged.emit(model_index, model_index)
+                    else:
+                        # Build long chapter prefixes one section per event-loop turn.
+                        self._page_queue.append(row)
+                except (IndexError, KeyError, RuntimeError, ValueError):
+                    self._pages[row] = None
+                    self._pending_pages.discard(row)
+                    self.dataChanged.emit(model_index, model_index)
+
+        if self._page_queue:
+            self._page_task_scheduled = True
+            QTimer.singleShot(10, self._compute_next_page)
 
     def _chapter_start(self, section_index: int) -> tuple[int, str]:
         cached = self._chapter_starts.get(section_index)
@@ -241,19 +300,21 @@ class _SearchResultModel(QAbstractListModel):
             self._chapter_starts[index] = (chapter_start, chapter)
         return chapter_start, chapter
 
-    def _chapter_page_offset(self, section_index: int, chapter_start: int) -> int:
-        cached = self._section_page_offsets.get(section_index)
-        if cached is not None:
-            return cached
-        page_offset = 0
-        for index in range(chapter_start, section_index):
-            cached_offset = self._section_page_offsets.get(index)
-            if cached_offset is None:
-                self._section_page_offsets[index] = page_offset
-                cached_offset = page_offset
-            page_offset = cached_offset + self._section_page_count(index)
-        self._section_page_offsets[section_index] = page_offset
-        return page_offset
+    def _advance_chapter_page_offset(self, section_index: int, chapter_start: int) -> bool:
+        if section_index in self._section_page_offsets:
+            return True
+        if chapter_start not in self._section_page_offsets:
+            self._section_page_offsets[chapter_start] = 0
+            return section_index == chapter_start
+        for index in range(chapter_start + 1, section_index + 1):
+            if index in self._section_page_offsets:
+                continue
+            previous_offset = self._section_page_offsets.get(index - 1)
+            if previous_offset is None:
+                return False
+            self._section_page_offsets[index] = previous_offset + self._section_page_count(index - 1)
+            return index == section_index
+        return section_index in self._section_page_offsets
 
     def _section_page_count(self, section_index: int) -> int:
         if section_index not in self._section_page_counts:
@@ -264,19 +325,21 @@ class _SearchResultModel(QAbstractListModel):
             )
         return self._section_page_counts[section_index]
 
-    def _entry(self, row: int) -> tuple[str, int, tuple[str, str, str, bool, bool]]:
+    def _entry(self, row: int) -> tuple[str, tuple[str, str, str, bool, bool]]:
         cached = self._entries.get(row)
         if cached is not None:
             return cached
 
         section_index, start, end = self.matches[row]
         section = self.book.sections[section_index]
-        chapter_start, chapter = self._chapter_start(section_index)
-        page_offset = self._chapter_page_offset(section_index, chapter_start)
-        page = page_offset + self.owner.reader.page_for_section_offset(section, start)
+        _chapter_start, chapter = self._chapter_start(section_index)
+        viewport_width = max(1, self.owner.search_results.viewport().width())
+        context_chars = max(20, min(88, viewport_width // 7))
+        before_chars = context_chars * 2 // 5
+        after_chars = context_chars - before_chars
 
-        context_start = max(0, start - 36)
-        context_end = min(len(section.text), end + 64)
+        context_start = max(0, start - before_chars)
+        context_end = min(len(section.text), end + after_chars)
 
         def flatten(value: str) -> str:
             value = value.replace("\ufffc", " ")
@@ -289,13 +352,15 @@ class _SearchResultModel(QAbstractListModel):
             context_start > 0,
             context_end < len(section.text),
         )
-        entry = (chapter, page, snippet)
+        entry = (chapter, snippet)
         self._entries[row] = entry
         return entry
 
 
 class _SearchResultDelegate(QStyledItemDelegate):
-    ROW_HEIGHT = 112
+    NARROW_ROW_HEIGHT = 90
+    MEDIUM_ROW_HEIGHT = 102
+    WIDE_ROW_HEIGHT = 112
 
     def __init__(self, owner, parent=None):
         super().__init__(parent)
@@ -306,7 +371,14 @@ class _SearchResultDelegate(QStyledItemDelegate):
         self._palette = dict(palette)
 
     def sizeHint(self, option, index):
-        return QSize(max(0, option.rect.width()), self.ROW_HEIGHT)
+        width = max(0, option.rect.width()) or self.owner.search_results.viewport().width()
+        if width < 250:
+            height = self.NARROW_ROW_HEIGHT
+        elif width < 340:
+            height = self.MEDIUM_ROW_HEIGHT
+        else:
+            height = self.WIDE_ROW_HEIGHT
+        return QSize(width, height)
 
     def paint(self, painter, option, index):
         palette = self._palette
@@ -327,7 +399,7 @@ class _SearchResultDelegate(QStyledItemDelegate):
 
         chapter = str(index.data(_SEARCH_CHAPTER_ROLE) or "")
         page = index.data(_SEARCH_PAGE_ROLE)
-        page_label = self.owner.t("第 {page} 页", page=page)
+        page_label = self.owner.t("第 {page} 页", page=page) if page is not None else "…"
         heading_font = QFont(option.font)
         heading_font.setPointSizeF(9.5)
         heading_font.setWeight(QFont.Weight.DemiBold)
@@ -919,8 +991,8 @@ class MainWindow(QMainWindow):
         self.search_results.setObjectName("searchResults")
         self.search_results.setAccessibleName("全书搜索结果")
         self.search_results.setProperty("translation_accessible", "搜索结果")
-        self.search_results.setUniformItemSizes(True)
-        self.search_results.setSpacing(2)
+        self.search_results.setUniformItemSizes(False)
+        self.search_results.setSpacing(4)
         self.search_results.setMouseTracking(True)
         self.search_result_model = _SearchResultModel(self, self.search_results)
         self.search_result_delegate = _SearchResultDelegate(self, self.search_results)
