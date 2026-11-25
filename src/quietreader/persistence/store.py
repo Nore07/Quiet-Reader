@@ -9,10 +9,27 @@ from quietreader.domain.models import Settings
 VERSION = 1
 MAX_BOOKMARKS = 200
 MAX_BOOKMARK_NOTE = 1000
+MAX_TERM_NOTES = 500
+MAX_TERM_TEXT = 60
+MAX_TERM_NOTE = 1000
 MAX_BOOK_RECORDS = 500
 MAX_BOOK_TITLE_OVERRIDE = 200
 MAX_JUMP_HISTORY = 30
 MAX_JUMP_HISTORY_BOOKS = 100
+
+
+def normalize_term_text(raw: str) -> str:
+    if not isinstance(raw, str):
+        return ""
+    cleaned = " ".join(raw.replace("\x00", "").split())
+    return cleaned[:MAX_TERM_TEXT].strip()
+
+
+def normalize_term_note(raw: str) -> str:
+    if not isinstance(raw, str):
+        return ""
+    cleaned = raw.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return cleaned[:MAX_TERM_NOTE].strip()
 
 
 def _clean_books(raw):
@@ -102,6 +119,57 @@ def _clean_jump_history(raw):
     return clean
 
 
+def _clean_term_notes(raw):
+    if not isinstance(raw, dict):
+        return {}
+    clean = {}
+    remaining = MAX_TERM_NOTES
+    for book_id, records in raw.items():
+        if remaining <= 0:
+            break
+        if (
+            not isinstance(book_id, str)
+            or not book_id
+            or "\x00" in book_id
+            or len(book_id) > 100
+            or not isinstance(records, list)
+        ):
+            continue
+        rows = []
+        seen = set()
+        for record in records:
+            if remaining <= 0:
+                break
+            if not isinstance(record, dict):
+                continue
+            raw_term = record.get("term")
+            raw_note = record.get("note")
+            created = record.get("created", "")
+            if (
+                not isinstance(raw_term, str)
+                or not isinstance(raw_note, str)
+                or not isinstance(created, str)
+            ):
+                continue
+            term = normalize_term_text(raw_term)
+            note = normalize_term_note(raw_note)
+            if not term or not note:
+                continue
+            key = term.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({
+                "term": term,
+                "note": note,
+                "created": created.replace("\x00", "")[:40],
+            })
+            remaining -= 1
+        if rows:
+            clean[book_id] = rows
+    return clean
+
+
 def initial_state():
     return {
         "version": VERSION,
@@ -111,6 +179,7 @@ def initial_state():
         "bookmarks": {},
         "jump_history": {},
         "forward_history": {},
+        "term_notes": {},
         "last_book": "",
         "last_browse_dir": "",
         "last_update_check": 0,
@@ -153,6 +222,7 @@ class StateStore:
                 clean["bookmarks"] = _clean_bookmarks(value.get("bookmarks", {}))
                 clean["jump_history"] = _clean_jump_history(value.get("jump_history", {}))
                 clean["forward_history"] = _clean_jump_history(value.get("forward_history", {}))
+                clean["term_notes"] = _clean_term_notes(value.get("term_notes", {}))
                 clean["last_book"] = value.get("last_book", "") if isinstance(value.get("last_book", ""), str) else ""
                 browse_dir = value.get("last_browse_dir", "")
                 if isinstance(browse_dir, str) and "\x00" not in browse_dir and len(browse_dir) <= 4096:

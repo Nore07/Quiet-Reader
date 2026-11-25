@@ -13,7 +13,7 @@ from threading import Event
 from time import time
 
 from PySide6.QtCore import (
-    QAbstractListModel, QEvent, QItemSelectionModel, QModelIndex, QObject, QPoint,
+    QAbstractListModel, QEvent, QItemSelectionModel, QModelIndex, QObject, QPoint, QRect,
     QRunnable, QSize, QThreadPool, Qt, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QInputDialog, QLineEdit,
     QListView, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
     QSizeGrip, QSizePolicy, QProgressBar, QStackedWidget, QStyle, QStyledItemDelegate,
-    QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
+    QSystemTrayIcon, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from quietreader.content.local import ENCODINGS, ImportError as BookImportError, load_book, read_epub_title
@@ -32,7 +32,7 @@ from quietreader.desktop.color_picker import DesktopColorPicker, sample_window_p
 from quietreader.desktop.geometry import visible_bounds
 from quietreader.desktop.hotkey import GlobalHotkey
 from quietreader.desktop.window_effects import set_window_border_hidden
-from quietreader.domain.models import Bookmark, Position, Settings, restore_position
+from quietreader.domain.models import Bookmark, Position, Settings, TermNote, restore_position
 from quietreader.ui.appearance_popover import AppearancePopover
 from quietreader.ui.controls import IconButton, SegmentedControl, ThinSlider
 from quietreader.ui.covers import render_cover_pixmap
@@ -41,6 +41,7 @@ from quietreader.ui.icons import render_icon_pixmap, vector_icon
 from quietreader.ui.reader import PageView
 from quietreader.ui.settings import SettingsDialog
 from quietreader.ui.settings_page import SettingsPage
+from quietreader.ui.term_notes import TermHoverCard, TermNoteDialog
 from quietreader.ui.theme import colors, stylesheet
 from quietreader.ui.tokens import (
     COMPACT_BRAND_BREAKPOINT, CRUMB_MIN_WIDTH, NARROW_BREAKPOINT, TOPBAR_HEIGHT,
@@ -53,6 +54,7 @@ from quietreader.ui.toast import ToastNotice
 from quietreader.persistence.store import (
     MAX_BOOKMARKS, MAX_BOOKMARK_NOTE, MAX_BOOK_RECORDS, MAX_BOOK_TITLE_OVERRIDE,
     MAX_JUMP_HISTORY, MAX_JUMP_HISTORY_BOOKS,
+    MAX_TERM_NOTES, MAX_TERM_TEXT, normalize_term_note, normalize_term_text,
 )
 from quietreader.library.shelf import SUPPORTED_SUFFIXES, ShelfError, ShelfManager, UNCLASSIFIED, book_id_for_path
 from quietreader.ui.shelf import ShelfPanel, display_title_for_record
@@ -592,14 +594,17 @@ class _SearchResultDelegate(QStyledItemDelegate):
 
 
 class _SidebarTabSwitcher(QWidget):
-    """Foliate-style stacked sidebar content with a clean bottom icon switcher."""
+    """Foliate-style stacked sidebar content with a responsive bottom tab switcher."""
 
     currentChanged = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._palette = {}
-        self._buttons: list[tuple[QPushButton, str]] = []
+        self._buttons: list[tuple[QToolButton, str]] = []
+        self._labels: list[str] = []
+        self._icon_only = False
+        self._icon_px = 13
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
@@ -611,23 +616,33 @@ class _SidebarTabSwitcher(QWidget):
         self.bar.setObjectName("sidebarBottomBar")
         self.bar_layout = QHBoxLayout(self.bar)
         self.bar_layout.setContentsMargins(0, 6, 0, 0)
-        self.bar_layout.setSpacing(3)
+        self.bar_layout.setSpacing(2)
         outer.addWidget(self.bar)
 
     def addTab(self, widget: QWidget, label: str, icon_name: str = ""):
         index = self.stack.addWidget(widget)
-        btn = QPushButton(label, self.bar)
+        btn = QToolButton(self.bar)
         btn.setObjectName("sidebarTabBtn")
+        btn.setText(label)
+        btn.setToolTip(label)
+        btn.setAccessibleName(label)
+        btn.setAutoRaise(True)
         btn.setCheckable(True)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setMinimumWidth(0)
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextUnderIcon if icon_name else Qt.ToolButtonStyle.ToolButtonTextOnly
+        )
+        btn.setIconSize(QSize(13, 13))
         btn.clicked.connect(lambda _c=False, idx=index: self.setCurrentIndex(idx))
         self._buttons.append((btn, icon_name))
+        self._labels.append(label)
         self.bar_layout.addWidget(btn)
         if index == 0:
             self.setCurrentIndex(0)
+        self._sync_button_modes()
         return index
 
     def setCurrentIndex(self, index: int):
@@ -649,25 +664,81 @@ class _SidebarTabSwitcher(QWidget):
             self._buttons[index][0].setVisible(visible)
             if not visible and self.stack.currentIndex() == index:
                 self.setCurrentIndex(0)
+            self._sync_button_modes()
 
     def setTabText(self, index: int, text: str):
         if 0 <= index < len(self._buttons):
-            self._buttons[index][0].setText(text)
-            self._buttons[index][0].setToolTip(text)
-            self._buttons[index][0].setAccessibleName(text)
+            self._labels[index] = text
+            btn = self._buttons[index][0]
+            btn.setText(text)
+            btn.setToolTip(text)
+            btn.setAccessibleName(text)
+            self._sync_button_modes()
 
     def apply_palette(self, palette: dict[str, str]):
         self._palette = dict(palette)
         self._refresh_icons()
+        self._sync_button_modes()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_button_modes()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_button_modes()
+
+    def _sync_button_modes(self):
+        if not self._buttons:
+            return
+        avail = self.bar.width() if self.bar.width() > 20 else self.width()
+        if avail <= 20:
+            avail = 204
+        visible_indices = [i for i, (btn, _) in enumerate(self._buttons) if not btn.isHidden()]
+        if not visible_indices:
+            return
+        needed_widths: dict[int, int] = {}
+        total_labeled = 0
+        for i in visible_indices:
+            btn, icon_name = self._buttons[i]
+            btn.ensurePolished()
+            metrics = QFontMetrics(btn.font())
+            label_w = metrics.horizontalAdvance(self._labels[i]) + 8
+            need = max(28 if icon_name else 24, label_w)
+            needed_widths[i] = need
+            total_labeled += need
+        spacing_total = self.bar_layout.spacing() * max(0, len(visible_indices) - 1)
+        icon_only = (total_labeled + spacing_total) > avail
+        icon_px = 13 if (icon_only and len(visible_indices) >= 6) else (15 if icon_only else 13)
+        changed_mode = (icon_only != self._icon_only) or (icon_px != self._icon_px)
+        self._icon_only = icon_only
+        self._icon_px = icon_px
+        for i, (btn, icon_name) in enumerate(self._buttons):
+            if icon_name:
+                btn.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonIconOnly
+                    if icon_only
+                    else Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+                )
+                btn.setIconSize(QSize(icon_px, icon_px))
+                btn.setFixedHeight(30 if icon_only else 38)
+            else:
+                btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                btn.setFixedHeight(30 if icon_only else 38)
+            stretch = 1 if icon_only else needed_widths.get(i, 36)
+            self.bar_layout.setStretchFactor(btn, max(1, stretch))
+        if changed_mode:
+            self._refresh_icons()
 
     def _refresh_icons(self):
         if not self._palette:
             return
+        icon_px = self._icon_px
         for btn, icon_name in self._buttons:
             if not icon_name:
                 continue
             color = self._palette.get("accent", "#2e5641") if btn.isChecked() else self._palette.get("muted", "#647569")
-            btn.setIcon(vector_icon(icon_name, color, 13))
+            btn.setIcon(vector_icon(icon_name, color, icon_px))
 
 
 class WindowSurface(QWidget):
@@ -1091,7 +1162,7 @@ class MainWindow(QMainWindow):
         self.chapters.itemActivated.connect(self._chapter_activated)
         self.chapters.itemClicked.connect(self._chapter_activated)
         toc_layout.addWidget(self.chapters, 1)
-        self.reading_tabs.addTab(toc_panel, "目录", "toc")
+        self._tab_toc = self.reading_tabs.addTab(toc_panel, "目录", "toc")
         bookmark_panel = QWidget()
         bookmark_layout = QVBoxLayout(bookmark_panel)
         bookmark_layout.setContentsMargins(2, 4, 2, 4)
@@ -1121,19 +1192,66 @@ class MainWindow(QMainWindow):
             button.setProperty("translation_accessible", label)
             bookmark_actions.addWidget(button)
         bookmark_layout.addLayout(bookmark_actions)
-        self.reading_tabs.addTab(bookmark_panel, "书签", "bookmark")
+        self._tab_bookmarks = self.reading_tabs.addTab(bookmark_panel, "书签", "bookmark")
+
+        term_panel = QWidget()
+        term_layout = QVBoxLayout(term_panel)
+        term_layout.setContentsMargins(2, 2, 2, 4)
+        term_layout.setSpacing(6)
+        self.term_notes_filter = QLineEdit(term_panel)
+        self.term_notes_filter.setObjectName("shelfSearch")
+        self.term_notes_filter.setMinimumWidth(0)
+        self.term_notes_filter.setClearButtonEnabled(True)
+        self.term_notes_filter.setPlaceholderText("筛选词条…")
+        self.term_notes_filter.setAccessibleName("筛选词条")
+        self.term_notes_filter.setProperty("translation_accessible", "筛选词条")
+        self.term_notes_filter.textChanged.connect(self._filter_term_notes)
+        term_layout.addWidget(self.term_notes_filter)
+        self.term_notes_list = QListWidget(term_panel)
+        self.term_notes_list.setObjectName("termNotesList")
+        self.term_notes_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.term_notes_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.term_notes_list.setAccessibleName("词条标注")
+        self.term_notes_list.setProperty("translation_accessible", "词条标注")
+        self.term_notes_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.term_notes_list.customContextMenuRequested.connect(self._show_term_note_list_menu)
+        self.term_notes_list.itemDoubleClicked.connect(self._term_note_double_clicked)
+        self.term_notes_list.currentRowChanged.connect(self._sync_term_note_buttons)
+        term_layout.addWidget(self.term_notes_list, 1)
+        term_actions = QHBoxLayout()
+        term_actions.setContentsMargins(0, 0, 0, 0)
+        term_actions.setSpacing(4)
+        self.term_add_button = self._button("添加", self.prompt_add_term_note)
+        self.term_edit_button = self._button("编辑", self.prompt_edit_selected_term_note)
+        self.term_remove_button = self._button("删除", self.remove_selected_term_note)
+        for button, label in (
+            (self.term_add_button, "添加词条标注"),
+            (self.term_edit_button, "编辑词条标注"),
+            (self.term_remove_button, "删除词条标注"),
+        ):
+            button.setObjectName("bookmarkAction")
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setToolTip(label)
+            button.setProperty("translation_tip", label)
+            button.setAccessibleName(label)
+            button.setProperty("translation_accessible", label)
+            term_actions.addWidget(button)
+        term_layout.addLayout(term_actions)
+        self._tab_terms = self.reading_tabs.addTab(term_panel, "词条", "term")
+
         self.book_info = BookInfoPanel()
-        self.reading_tabs.addTab(self.book_info, "资料", "info")
+        self._tab_info = self.reading_tabs.addTab(self.book_info, "资料", "info")
         self.pages = QListWidget()
         self.pages.setAccessibleName("书中页码")
         self.pages.itemActivated.connect(self._page_activated)
         self.pages.itemClicked.connect(self._page_activated)
-        self.reading_tabs.addTab(self.pages, "页码")
+        self._tab_pages = self.reading_tabs.addTab(self.pages, "页码", "pages")
         self.landmarks = QListWidget()
         self.landmarks.setAccessibleName("书中位置")
         self.landmarks.itemActivated.connect(self._page_activated)
         self.landmarks.itemClicked.connect(self._page_activated)
-        self.reading_tabs.addTab(self.landmarks, "位置")
+        self._tab_landmarks = self.reading_tabs.addTab(self.landmarks, "位置", "landmarks")
 
         self.search_panel = QWidget()
         search_panel_layout = QVBoxLayout(self.search_panel)
@@ -1164,10 +1282,11 @@ class MainWindow(QMainWindow):
         search_panel_layout.addWidget(self.search_results, 1)
         self.search_tab_index = self.reading_tabs.addTab(self.search_panel, "搜索", "search")
         self.reading_tabs.currentChanged.connect(self._on_reading_tab_changed)
+        self.reading_tabs.setTabVisible(self._tab_terms, True)
+        self.reading_tabs.setTabVisible(self._tab_info, False)
+        self.reading_tabs.setTabVisible(self._tab_pages, False)
+        self.reading_tabs.setTabVisible(self._tab_landmarks, False)
         self.reading_tabs.setTabVisible(self.search_tab_index, False)
-        self.reading_tabs.setTabVisible(2, False)
-        self.reading_tabs.setTabVisible(3, False)
-        self.reading_tabs.setTabVisible(4, False)
         side.addWidget(self.reading_tabs, 1)
 
         self.book_progress_label = self._label("全书进度：--", "status")
@@ -1258,6 +1377,10 @@ class MainWindow(QMainWindow):
         self.reader.visibility_requested.connect(self.toggle_visible)
         self.reader.emergency_requested.connect(self.emergency_exit)
         self.reader.reflowed.connect(self._on_reader_reflowed)
+        self.reader.term_hovered.connect(self._on_term_hovered)
+        self.reader.term_hover_cleared.connect(self._on_term_hover_cleared)
+        self.reader.term_note_requested.connect(self.open_term_note_dialog)
+        self.reader.term_search_requested.connect(self.search_in_book)
         reading.addWidget(self.reader, 1)
 
         self.progress = ThinSlider(Qt.Orientation.Horizontal)
@@ -1417,6 +1540,7 @@ class MainWindow(QMainWindow):
         self.emergency_shortcut.setAutoRepeat(False)
         self.emergency_shortcut.activated.connect(self.emergency_exit)
         self.toast = ToastNotice(self.surface)
+        self.term_hover_card = TermHoverCard(self.surface)
         self.appearance_popover = AppearancePopover(self.surface)
         self.appearance_popover.settings_changed.connect(self.apply_settings)
         self.appearance_popover.more_settings_requested.connect(lambda: self.show_settings(section="reading"))
@@ -1431,6 +1555,7 @@ class MainWindow(QMainWindow):
         self.main_pages.currentChanged.connect(self._main_page_changed)
         self._update_sidebar_book_card()
         self._update_progress()
+        self._refresh_term_notes()
 
     def _setup_system(self):
         app = QApplication.instance()
@@ -1724,7 +1849,8 @@ class MainWindow(QMainWindow):
         record["path"] = str(new_path)
         positions = self.store.state.setdefault("positions", {})
         bookmarks = self.store.state.setdefault("bookmarks", {})
-        for mapping in (positions, bookmarks):
+        term_notes = self.store.state.setdefault("term_notes", {})
+        for mapping in (positions, bookmarks, term_notes):
             if old_id in mapping:
                 previous = mapping.pop(old_id)
                 mapping.setdefault(new_id, previous)
@@ -1838,6 +1964,7 @@ class MainWindow(QMainWindow):
         self.store.state.get("bookmarks", {}).pop(book_id, None)
         self.store.state.get("jump_history", {}).pop(book_id, None)
         self.store.state.get("forward_history", {}).pop(book_id, None)
+        self.store.state.get("term_notes", {}).pop(book_id, None)
         if self.store.state.get("last_book") == book_id:
             self.store.state["last_book"] = ""
         if self.book and self.book.id == book_id:
@@ -1902,6 +2029,7 @@ class MainWindow(QMainWindow):
                 self.store.state.get("bookmarks", {}).pop(book_id, None)
                 self.store.state.get("jump_history", {}).pop(book_id, None)
                 self.store.state.get("forward_history", {}).pop(book_id, None)
+                self.store.state.get("term_notes", {}).pop(book_id, None)
                 if self.store.state.get("last_book") == book_id:
                     self.store.state["last_book"] = ""
                 if self.book and self.book.id == book_id:
@@ -1916,6 +2044,7 @@ class MainWindow(QMainWindow):
     def _clear_current_book(self):
         if self.focus_mode:
             self.toggle_focus()
+        self._hide_term_hover()
         self.close_book_search(focus_reader=False, clear_query=True)
         self._jump_history.clear()
         self._forward_history.clear()
@@ -1924,8 +2053,13 @@ class MainWindow(QMainWindow):
             self.toc_filter.blockSignals(True)
             self.toc_filter.clear()
             self.toc_filter.blockSignals(False)
+        if hasattr(self, "term_notes_filter"):
+            self.term_notes_filter.blockSignals(True)
+            self.term_notes_filter.clear()
+            self.term_notes_filter.blockSignals(False)
         self.book = None
         self.section_index = 0
+        self.reader.set_term_notes([])
         self.reader.set_text("")
         self.book_title.setText(self.t("一本书，一处安静"))
         self.book_title.setProperty("translation_source", "一本书，一处安静")
@@ -1936,6 +2070,7 @@ class MainWindow(QMainWindow):
         self.pages.clear()
         self.landmarks.clear()
         self.bookmarks.clear()
+        self.term_notes_list.clear()
         self.reading_tabs.setTabVisible(self.search_tab_index, False)
         self.book_info.set_book(None, self.settings.language)
         self.progress.setValue(0)
@@ -1944,14 +2079,15 @@ class MainWindow(QMainWindow):
         self.page_label.setProperty("full_text", "PageUp / PageDown")
         self.page_label.setProperty("compact_text", "Pg")
         self.page_label.setToolTip("PageUp / PageDown")
-        self.reading_tabs.setTabVisible(3, False)
-        self.reading_tabs.setTabVisible(4, False)
+        self.reading_tabs.setTabVisible(self._tab_pages, False)
+        self.reading_tabs.setTabVisible(self._tab_landmarks, False)
         self.encoding_button.hide()
         self.encoding_bar.hide()
         self._update_jump_navigation()
         self._update_header_crumb()
         self._update_progress()
         self._refresh_bookmarks()
+        self._refresh_term_notes()
 
     def _refresh_shelf(self):
         if not hasattr(self, "shelf"):
@@ -1997,9 +2133,14 @@ class MainWindow(QMainWindow):
                 self.toc_filter.blockSignals(True)
                 self.toc_filter.clear()
                 self.toc_filter.blockSignals(False)
+            if hasattr(self, "term_notes_filter"):
+                self.term_notes_filter.blockSignals(True)
+                self.term_notes_filter.clear()
+                self.term_notes_filter.blockSignals(False)
             self.close_book_search(focus_reader=False, clear_query=True)
         else:
             self._invalidate_book_search_requests()
+        self._hide_term_hover()
         self.book = book
         self._restore_jump_history(book)
         record = next((item for item in self.store.state["books"] if item["id"] == book.id), None)
@@ -2010,9 +2151,10 @@ class MainWindow(QMainWindow):
         self.book_title.setText(display_title)
         self.book_title.setProperty("translation_source", None)
         self.book_info.set_book(book, self.settings.language, display_title=display_title)
-        self.reading_tabs.setTabVisible(2, False)
+        self.reading_tabs.setTabVisible(self._tab_info, False)
         self.reading_tabs.setTabVisible(self.search_tab_index, True)
         self._refresh_bookmarks()
+        self._refresh_term_notes()
         self.chapters.clear()
         self.pages.clear()
         self.landmarks.clear()
@@ -2036,9 +2178,9 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(entry.label)
                 item.setData(Qt.ItemDataRole.UserRole, target)
                 self.landmarks.addItem(item)
-        self.reading_tabs.setTabVisible(3, self.pages.count() > 0)
-        self.reading_tabs.setTabVisible(4, self.landmarks.count() > 0)
-        self.reading_tabs.setCurrentIndex(0)
+        self.reading_tabs.setTabVisible(self._tab_pages, self.pages.count() > 0)
+        self.reading_tabs.setTabVisible(self._tab_landmarks, self.landmarks.count() > 0)
+        self.reading_tabs.setCurrentIndex(self._tab_toc)
         raw = self.store.state["positions"].get(book.id, {})
         index, offset = restore_position(book.sections, Position(raw.get("section_id", ""), raw.get("offset", 0)))
         self._update_jump_navigation()
@@ -2182,7 +2324,7 @@ class MainWindow(QMainWindow):
         self.search_count_label.setVisible(bar_w >= 178)
 
     def _toggle_sidebar_info(self, checked=False):
-        info_index = 2
+        info_index = self._tab_info
         current = self.reading_tabs.currentIndex()
         if checked:
             if current != info_index:
@@ -2191,11 +2333,11 @@ class MainWindow(QMainWindow):
         elif current == info_index:
             target = self._sidebar_info_return_tab
             if target == info_index or not 0 <= target < self.reading_tabs.stack.count():
-                target = 0
+                target = self._tab_toc
             self.reading_tabs.setCurrentIndex(target)
 
     def _on_reading_tab_changed(self, index: int):
-        self.sidebar_info_button.setChecked(index == 2)
+        self.sidebar_info_button.setChecked(index == self._tab_info)
         if index == self.search_tab_index:
             if not self.book:
                 self.reading_tabs.setCurrentIndex(self._last_sidebar_tab_index)
@@ -2229,9 +2371,10 @@ class MainWindow(QMainWindow):
             self._go_to_search_match(model_index.row(), remember_origin=True)
             self.reader.setFocus()
 
-    def open_book_search(self, focus_input=True):
+    def open_book_search(self, focus_input=True, *, initial_query: str | None = None):
         if self.focus_mode or not self.book:
             return
+        self._hide_term_hover()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
         if hasattr(self, "focus_popover"):
@@ -2257,25 +2400,39 @@ class MainWindow(QMainWindow):
         self.reading_tabs.setCurrentIndex(self.search_tab_index)
         self._sync_page_navigation()
         self._sync_search_bar_responsive()
-        selected = self.reader.selection.selectedText().replace("\u2029", "\n").strip()
         anchor_override = None
-        if selected:
-            first_line = selected.splitlines()[0].strip()[:120]
-            if first_line:
-                sel_start_py = self.reader._offset_map.to_python(self.reader.selection.selectionStart())
-                anchor_override = (self.section_index, sel_start_py)
-                if first_line != self.search_input.text():
-                    self.search_input.blockSignals(True)
-                    self.search_input.setText(first_line)
-                    self.search_input.blockSignals(False)
+        navigate_now = False
+        if isinstance(initial_query, str) and initial_query.strip():
+            cleaned = initial_query.strip()[:120]
+            self.search_input.blockSignals(True)
+            self.search_input.setText(cleaned)
+            self.search_input.blockSignals(False)
+            navigate_now = True
+        else:
+            selected = self.reader.selection.selectedText().replace("\u2029", "\n").strip()
+            if selected:
+                first_line = selected.splitlines()[0].strip()[:120]
+                if first_line:
+                    sel_start_py = self.reader._offset_map.to_python(self.reader.selection.selectionStart())
+                    anchor_override = (self.section_index, sel_start_py)
+                    if first_line != self.search_input.text():
+                        self.search_input.blockSignals(True)
+                        self.search_input.setText(first_line)
+                        self.search_input.blockSignals(False)
         if self.search_input.text():
-            self._run_book_search(navigate=False, anchor=anchor_override)
+            self._run_book_search(navigate=navigate_now, anchor=anchor_override)
         else:
             self._set_search_results_state("")
         self._update_jump_navigation()
         if focus_input:
             self.search_input.setFocus()
             self.search_input.selectAll()
+
+    def search_in_book(self, query: str):
+        cleaned = (query or "").strip()
+        if not cleaned or self.focus_mode or not self.book:
+            return
+        self.open_book_search(focus_input=True, initial_query=cleaned)
 
     def close_book_search(self, checked=False, *, focus_reader=True, clear_query=False):
         self._invalidate_book_search_requests()
@@ -2931,7 +3088,7 @@ class MainWindow(QMainWindow):
         records.insert(0, record)
         self._refresh_bookmarks()
         self.bookmarks.setCurrentRow(0)
-        self.reading_tabs.setCurrentIndex(1)
+        self.reading_tabs.setCurrentIndex(self._tab_bookmarks)
         self.set_status("书签已添加。")
         self.schedule_save()
 
@@ -2982,6 +3139,321 @@ class MainWindow(QMainWindow):
             return
         self._navigate_with_jump_history(target_index, record["offset"])
         self.reader.setFocus()
+
+    def _sync_escape_shortcut(self):
+        if not hasattr(self, "escape_shortcut"):
+            return
+        settings_active = hasattr(self, "settings_page") and self.main_pages.currentWidget() is self.settings_page
+        hover_open = hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden()
+        self.escape_shortcut.setEnabled(
+            self.focus_mode or settings_active or self._is_search_bar_open() or hover_open
+        )
+
+    def _on_term_hovered(self, record, anchor_rect):
+        if (
+            not isinstance(record, dict)
+            or not isinstance(anchor_rect, QRect)
+            or not self.book
+            or self.closed
+            or self._window_hidden
+            or self._focus_adjust_active
+            or not hasattr(self, "term_hover_card")
+            or self.main_pages.currentWidget() is not self.reader_page
+        ):
+            return
+        if (
+            (hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden())
+            or (hasattr(self, "focus_popover") and not self.focus_popover.isHidden())
+        ):
+            return
+        top_left = self.reader.mapTo(self.surface, anchor_rect.topLeft())
+        surface_rect = QRect(top_left, anchor_rect.size())
+        reader_bounds = QRect(self.reader.mapTo(self.surface, QPoint(0, 0)), self.reader.size())
+        self.term_hover_card.show_for(
+            record.get("term", ""),
+            record.get("note", ""),
+            surface_rect,
+            bounds_rect=reader_bounds,
+        )
+        self._sync_escape_shortcut()
+
+    def _on_term_hover_cleared(self):
+        if hasattr(self, "term_hover_card"):
+            self.term_hover_card.dismiss()
+        self._sync_escape_shortcut()
+
+    def _hide_term_hover(self):
+        if hasattr(self, "reader"):
+            self.reader.clear_term_hover()
+        if hasattr(self, "term_hover_card"):
+            self.term_hover_card.dismiss()
+        self._sync_escape_shortcut()
+
+    def get_term_notes(self, book_id: str | None = None) -> list[dict]:
+        target_id = book_id if book_id is not None else (self.book.id if self.book else "")
+        if not target_id:
+            return []
+        return list(self.store.state.get("term_notes", {}).get(target_id, []))
+
+    def _refresh_term_notes(self, select_term: str | None = None):
+        if not hasattr(self, "term_notes_list"):
+            return
+        previous_term = select_term
+        if previous_term is None:
+            current_item = self.term_notes_list.currentItem()
+            if current_item is not None:
+                previous_term = current_item.data(Qt.ItemDataRole.UserRole)
+        self.term_notes_list.clear()
+        if not self.book:
+            if hasattr(self, "reader"):
+                self.reader.set_term_notes([])
+            self.term_add_button.setEnabled(False)
+            self.term_edit_button.setEnabled(False)
+            self.term_remove_button.setEnabled(False)
+            return
+        records = self.store.state.get("term_notes", {}).get(self.book.id, [])
+        self.reader.set_term_notes(records)
+        tip_hint = self.t("双击在全书搜索此词条")
+        self.term_notes_list.ensurePolished()
+        selected_row = -1
+        for row_idx, record in enumerate(records):
+            term = record.get("term", "")
+            note = record.get("note", "")
+            item = QListWidgetItem("")
+            item.setData(Qt.ItemDataRole.UserRole, term)
+            item.setData(Qt.ItemDataRole.UserRole + 1, " ".join(note.split()))
+            item.setToolTip(f"{term}\n{note}\n\n{tip_hint}")
+            self.term_notes_list.addItem(item)
+            if previous_term and term.casefold() == previous_term.casefold():
+                selected_row = row_idx
+        self._elide_term_note_items()
+        self.term_add_button.setEnabled(True)
+        self._filter_term_notes()
+        if selected_row >= 0 and not self.term_notes_list.item(selected_row).isHidden():
+            self.term_notes_list.setCurrentRow(selected_row)
+        else:
+            first_visible = next(
+                (r for r in range(self.term_notes_list.count()) if not self.term_notes_list.item(r).isHidden()),
+                -1,
+            )
+            self.term_notes_list.setCurrentRow(first_visible)
+        self._sync_term_note_buttons()
+
+    def _elide_term_note_items(self):
+        if not hasattr(self, "term_notes_list") or not self.term_notes_list.count():
+            return
+        self.term_notes_list.ensurePolished()
+        metrics = QFontMetrics(self.term_notes_list.font())
+        sidebar_w = self.sidebar.width() if hasattr(self, "sidebar") and self.sidebar.width() > 60 else 224
+        avail_w = max(72, sidebar_w - 54)
+        for row in range(self.term_notes_list.count()):
+            item = self.term_notes_list.item(row)
+            term = item.data(Qt.ItemDataRole.UserRole) or ""
+            note_line = item.data(Qt.ItemDataRole.UserRole + 1) or ""
+            term_elided = metrics.elidedText(term, Qt.TextElideMode.ElideRight, avail_w)
+            preview = metrics.elidedText(note_line, Qt.TextElideMode.ElideRight, avail_w)
+            item.setText(f"{term_elided}\n{preview}" if preview else term_elided)
+
+    def _filter_term_notes(self, _text=""):
+        if not hasattr(self, "term_notes_list") or not hasattr(self, "term_notes_filter"):
+            return
+        query = self.term_notes_filter.text().strip().casefold()
+        records_by_key = {
+            r.get("term", "").casefold(): r
+            for r in self.get_term_notes()
+        }
+        for row in range(self.term_notes_list.count()):
+            item = self.term_notes_list.item(row)
+            term = item.data(Qt.ItemDataRole.UserRole) or ""
+            record = records_by_key.get(term.casefold(), {})
+            haystack = f"{term}\n{record.get('note', '')}".casefold()
+            item.setHidden(bool(query) and query not in haystack)
+        current = self.term_notes_list.currentItem()
+        if current is None or current.isHidden():
+            first_visible = next(
+                (r for r in range(self.term_notes_list.count()) if not self.term_notes_list.item(r).isHidden()),
+                -1,
+            )
+            self.term_notes_list.setCurrentRow(first_visible)
+        self._sync_term_note_buttons()
+
+    def _sync_term_note_buttons(self, *_args):
+        if not hasattr(self, "term_notes_list"):
+            return
+        has_book = self.book is not None
+        item = self.term_notes_list.currentItem()
+        has_selection = has_book and item is not None and not item.isHidden()
+        self.term_add_button.setEnabled(has_book)
+        self.term_edit_button.setEnabled(has_selection)
+        self.term_remove_button.setEnabled(has_selection)
+
+    def upsert_term_note(self, term: str, note: str, *, original_term: str | None = None) -> bool:
+        if not self.book:
+            return False
+        if self.store.read_only:
+            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+            return False
+        clean_term = normalize_term_text(term)
+        clean_note = normalize_term_note(note)
+        if not clean_term or not clean_note:
+            return False
+        all_records = self.store.state.setdefault("term_notes", {})
+        records = all_records.setdefault(self.book.id, [])
+        new_key = clean_term.casefold()
+        orig_key = normalize_term_text(original_term).casefold() if original_term else ""
+
+        existing_idx = next(
+            (i for i, item in enumerate(records) if item.get("term", "").casefold() == new_key),
+            None,
+        )
+        orig_idx = (
+            next((i for i, item in enumerate(records) if item.get("term", "").casefold() == orig_key), None)
+            if orig_key
+            else None
+        )
+
+        if orig_idx is not None:
+            if existing_idx is not None and existing_idx != orig_idx:
+                records[existing_idx]["term"] = clean_term
+                records[existing_idx]["note"] = clean_note
+                records.pop(orig_idx)
+            else:
+                records[orig_idx]["term"] = clean_term
+                records[orig_idx]["note"] = clean_note
+            status_key = "已更新词条标注：{term}"
+        elif existing_idx is not None:
+            records[existing_idx]["term"] = clean_term
+            records[existing_idx]["note"] = clean_note
+            status_key = "已更新词条标注：{term}"
+        else:
+            if sum(len(values) for values in all_records.values()) >= MAX_TERM_NOTES:
+                self.set_status("词条标注数量已达上限。")
+                return False
+            record = asdict(TermNote(
+                term=clean_term,
+                note=clean_note,
+                created=datetime.now(timezone.utc).isoformat(),
+            ))
+            records.insert(0, record)
+            status_key = "已添加词条标注：{term}"
+
+        self._refresh_term_notes(select_term=clean_term)
+        self.set_status(status_key, term=clean_term)
+        self.schedule_save()
+        return True
+
+    def remove_term_note(self, term: str) -> bool:
+        if not self.book:
+            return False
+        if self.store.read_only:
+            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+            return False
+        key = normalize_term_text(term).casefold()
+        if not key:
+            return False
+        all_records = self.store.state.get("term_notes", {})
+        records = all_records.get(self.book.id, [])
+        idx = next((i for i, item in enumerate(records) if item.get("term", "").casefold() == key), None)
+        if idx is None:
+            return False
+        removed = records.pop(idx)
+        if not records:
+            all_records.pop(self.book.id, None)
+        self._refresh_term_notes()
+        self.set_status("已删除词条标注：{term}", term=removed.get("term", term))
+        self.schedule_save()
+        return True
+
+    def open_term_note_dialog(self, term: str = ""):
+        if not self.book:
+            return False
+        if self.store.read_only:
+            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+            return False
+        self._hide_term_hover()
+        clean_term = normalize_term_text(term)
+        records = self.store.state.get("term_notes", {}).get(self.book.id, [])
+        existing = next(
+            (item for item in records if clean_term and item.get("term", "").casefold() == clean_term.casefold()),
+            None,
+        )
+        dialog = TermNoteDialog(
+            theme=self.settings.theme,
+            language=self.settings.language,
+            term=existing["term"] if existing else clean_term,
+            note=existing["note"] if existing else "",
+            editing=existing is not None,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        if dialog.delete_requested and existing is not None:
+            return self.remove_term_note(existing["term"])
+        new_term, new_note = dialog.values()
+        ok = self.upsert_term_note(
+            new_term,
+            new_note,
+            original_term=existing["term"] if existing else None,
+        )
+        if ok and not self.focus_mode:
+            self.reading_tabs.setCurrentIndex(self._tab_terms)
+        return ok
+
+    def prompt_add_term_note(self):
+        if not self.book:
+            return
+        selected = ""
+        if self.reader.selection.hasSelection():
+            raw = self.reader.selection.selectedText().replace("\u2029", "\n")
+            collapsed = " ".join(raw.replace("\x00", "").split())
+            if 1 <= len(collapsed) <= MAX_TERM_TEXT:
+                selected = collapsed
+        self.open_term_note_dialog(selected)
+
+    def prompt_edit_selected_term_note(self):
+        if not self.book:
+            return
+        item = self.term_notes_list.currentItem()
+        if item is None or item.isHidden():
+            return
+        term = item.data(Qt.ItemDataRole.UserRole) or ""
+        if term:
+            self.open_term_note_dialog(term)
+
+    def remove_selected_term_note(self):
+        if not self.book:
+            return
+        item = self.term_notes_list.currentItem()
+        if item is None or item.isHidden():
+            return
+        term = item.data(Qt.ItemDataRole.UserRole) or ""
+        if term:
+            self.remove_term_note(term)
+
+    def _term_note_double_clicked(self, item):
+        if not self.book or item is None:
+            return
+        term = item.data(Qt.ItemDataRole.UserRole) or ""
+        if term:
+            self.search_in_book(term)
+
+    def _show_term_note_list_menu(self, pos: QPoint):
+        if not self.book:
+            return
+        item = self.term_notes_list.itemAt(pos)
+        if item is None:
+            return
+        self.term_notes_list.setCurrentItem(item)
+        term = item.data(Qt.ItemDataRole.UserRole) or ""
+        if not term:
+            return
+        menu = QMenu(self)
+        menu.addAction(self.t("编辑词条标注：“{term}”", term=term), lambda t=term: self.open_term_note_dialog(t))
+        if not self.focus_mode:
+            menu.addAction(self.t("在全书搜索：“{term}”", term=term), lambda t=term: self.search_in_book(t))
+        menu.addSeparator()
+        menu.addAction(self.t("删除"), lambda t=term: self.remove_term_note(t))
+        menu.exec(self.term_notes_list.viewport().mapToGlobal(pos))
 
     def _refresh_recent(self):
         self._refresh_shelf()
@@ -3110,14 +3582,15 @@ class MainWindow(QMainWindow):
         if hasattr(self, "sidebar"):
             if reading_active and not self.focus_mode and not self.sidebar_collapsed:
                 width = max(150, min(224, int(self.width() * 0.28)))
-                self.sidebar.setFixedWidth(width)
+                if self.sidebar.width() != width:
+                    self.sidebar.setFixedWidth(width)
+                    self._elide_term_note_items()
+                else:
+                    self.sidebar.setFixedWidth(width)
             self.sidebar.setVisible(reading_active and not self.focus_mode and not self.sidebar_collapsed)
         if hasattr(self, "sidebar_toggle"):
             self.sidebar_toggle.setVisible(reading_active and not self.focus_mode)
-        if hasattr(self, "escape_shortcut"):
-            self.escape_shortcut.setEnabled(
-                self.focus_mode or settings_active or self._is_search_bar_open()
-            )
+        self._sync_escape_shortcut()
         is_ultra_narrow = self.width() < 430
         if hasattr(self, "topbar_layout"):
             self.topbar_layout.setSpacing(2 if is_ultra_narrow else 5)
@@ -3158,6 +3631,7 @@ class MainWindow(QMainWindow):
     def show_shelf_page(self, checked=False):
         if self.focus_mode:
             return
+        self._hide_term_hover()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
         if hasattr(self, "focus_popover"):
@@ -3294,6 +3768,7 @@ class MainWindow(QMainWindow):
         if self.focus_mode:
             self.toggle_focus()
             return
+        self._hide_term_hover()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
         if hasattr(self, "focus_popover"):
@@ -3312,6 +3787,7 @@ class MainWindow(QMainWindow):
     def toggle_focus(self, checked=None):
         if not self.book:
             return
+        self._hide_term_hover()
         entering = not self.focus_mode
         if entering:
             self.show_reading_page()
@@ -3454,10 +3930,21 @@ class MainWindow(QMainWindow):
         self.reading_button.setText(self.t("阅读"))
         self.shelf_button.setText(self.t("书架"))
         self._update_window_controls()
-        for index, source in enumerate(("目录", "书签", "资料", "页码", "位置", "搜索")):
+        for index, source in (
+            (self._tab_toc, "目录"),
+            (self._tab_bookmarks, "书签"),
+            (self._tab_terms, "词条"),
+            (self._tab_info, "资料"),
+            (self._tab_pages, "页码"),
+            (self._tab_landmarks, "位置"),
+            (self.search_tab_index, "搜索"),
+        ):
             self.reading_tabs.setTabText(index, self.t(source))
         if hasattr(self, "toc_filter"):
             self.toc_filter.setPlaceholderText(self.t("筛选目录…"))
+        if hasattr(self, "term_notes_filter"):
+            self.term_notes_filter.setPlaceholderText(self.t("筛选词条…"))
+            self._refresh_term_notes()
         if hasattr(self, "search_input"):
             self.search_input.setPlaceholderText(self.t("搜索全书内容…"))
             self._set_search_results_state(self.search_input.text())
@@ -3646,11 +4133,7 @@ class MainWindow(QMainWindow):
         self.focus_resample_shortcut.setKey(QKeySequence(settings.focus_resample_key))
         self.visibility_shortcut.setKey(QKeySequence(settings.hotkey))
         self.emergency_shortcut.setKey(QKeySequence(settings.emergency_key))
-        self.escape_shortcut.setEnabled(
-            self.focus_mode
-            or (hasattr(self, "settings_page") and self.main_pages.currentWidget() is self.settings_page)
-            or self._is_search_bar_open()
-        )
+        self._sync_escape_shortcut()
         self.root_layout.setContentsMargins(*((0, 0, 0, 0) if self.focus_mode else (12, 6, 12, 6)))
         self.root_layout.setSpacing(0 if self.focus_mode else 8)
         self.body_layout.setSpacing(0 if self.focus_mode else 16)
@@ -3738,6 +4221,8 @@ class MainWindow(QMainWindow):
     def _handle_escape(self):
         if self.focus_mode:
             self.toggle_focus()
+        elif hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden():
+            self._hide_term_hover()
         elif hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden():
             self.appearance_popover.dismiss()
         elif hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
@@ -3751,6 +4236,10 @@ class MainWindow(QMainWindow):
         if event.key() == Qt.Key.Key_Escape:
             if self.focus_mode:
                 self.toggle_focus()
+                event.accept()
+                return
+            if hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden():
+                self._hide_term_hover()
                 event.accept()
                 return
             if self._is_search_bar_open():
@@ -3768,6 +4257,7 @@ class MainWindow(QMainWindow):
     def show_settings(self, section=None):
         if self.focus_mode:
             self.toggle_focus()
+        self._hide_term_hover()
         if self.isHidden() or self.isMinimized():
             self.reveal()
         if hasattr(self, "appearance_popover"):
@@ -3820,6 +4310,7 @@ class MainWindow(QMainWindow):
     def show_layout_panel(self):
         if self.focus_mode:
             self.toggle_focus()
+        self._hide_term_hover()
         if hasattr(self, "focus_popover"):
             self.focus_popover.dismiss()
         if hasattr(self, "appearance_popover"):
@@ -3899,6 +4390,8 @@ class MainWindow(QMainWindow):
             self._update_jump_navigation()
         if hasattr(self, "toast") and not self.toast.isHidden():
             self.toast.reposition(self._toast_bottom_margin())
+        if hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden():
+            self._hide_term_hover()
         if hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden():
             self.appearance_popover.reposition()
         if hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
@@ -3934,6 +4427,8 @@ class MainWindow(QMainWindow):
             self.emergency_hotkey.unregister()
         if hasattr(self, "toast"):
             self.toast.dismiss()
+        if hasattr(self, "term_hover_card"):
+            self._hide_term_hover()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
         if hasattr(self, "focus_popover"):
@@ -3952,6 +4447,8 @@ class MainWindow(QMainWindow):
 
     def moveEvent(self, event):
         super().moveEvent(event)
+        if hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden():
+            self._hide_term_hover()
         if hasattr(self, "save_timer"):
             self.schedule_save()
         if self.focus_mode:
@@ -4006,6 +4503,7 @@ class MainWindow(QMainWindow):
         self._focus_adjust_drag = None
         self._focus_system_drag_active = False
         if active:
+            self._hide_term_hover()
             self._focus_resample_timer.stop()
             QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
             self._focus_cursor_override = True
@@ -4113,6 +4611,7 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event):
         event_type = event.type()
         if event_type == QEvent.Type.ApplicationDeactivate or (event_type == QEvent.Type.WindowDeactivate and watched is self):
+            self._hide_term_hover()
             self._set_focus_adjust_active(False)
             self._drag_has_valid = False
             self._set_drag_hover_active(False)
@@ -4201,6 +4700,8 @@ class MainWindow(QMainWindow):
             self._focus_picker.cancel()
         if hasattr(self, "toast"):
             self.toast.dismiss()
+        if hasattr(self, "term_hover_card"):
+            self._hide_term_hover()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
         if hasattr(self, "focus_popover"):

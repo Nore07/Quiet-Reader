@@ -122,7 +122,7 @@ def _rewrite_state_paths(
             if isinstance(old_id, str):
                 id_map[old_id] = new_id
 
-    for key in ("positions", "bookmarks"):
+    for key in ("positions", "bookmarks", "term_notes"):
         records = state.get(key)
         if isinstance(records, dict):
             state[key] = {id_map.get(book_id, book_id): value for book_id, value in records.items()}
@@ -266,7 +266,7 @@ def remap_relocated_shelf_paths(state: dict, data_directory: Path) -> bool:
             id_map[old_id] = new_id
         changed = True
 
-    for key in ("positions", "bookmarks"):
+    for key in ("positions", "bookmarks", "term_notes"):
         records = state.get(key)
         if not isinstance(records, dict):
             continue

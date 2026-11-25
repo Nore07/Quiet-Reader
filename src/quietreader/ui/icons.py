@@ -112,10 +112,42 @@ def _draw_icon(painter: QPainter, name: str):
         path.lineTo(6.5, 19.5)
         path.closeSubpath()
         painter.drawPath(path)
+    elif name == "term":
+        path = QPainterPath()
+        path.moveTo(4.5, 4.5)
+        path.lineTo(11.5, 4.5)
+        path.lineTo(19.5, 12.5)
+        path.lineTo(12.5, 19.5)
+        path.lineTo(4.5, 11.5)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawEllipse(QRectF(7.6, 7.6, 2.0, 2.0))
     elif name == "info":
         painter.drawEllipse(QRectF(4, 4, 16, 16))
         painter.drawLine(QPointF(12, 11.5), QPointF(12, 16))
         painter.drawPoint(QPointF(12, 8.2))
+    elif name == "pages":
+        path = QPainterPath()
+        path.moveTo(6.0, 4.0)
+        path.lineTo(14.5, 4.0)
+        path.lineTo(18.5, 8.0)
+        path.lineTo(18.5, 20.0)
+        path.lineTo(6.0, 20.0)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawLine(QPointF(14.0, 4.2), QPointF(14.0, 8.2))
+        painter.drawLine(QPointF(14.0, 8.2), QPointF(18.3, 8.2))
+        painter.drawLine(QPointF(9.0, 12.2), QPointF(15.5, 12.2))
+        painter.drawLine(QPointF(9.0, 15.8), QPointF(14.0, 15.8))
+    elif name == "landmarks":
+        painter.drawLine(QPointF(6.5, 4.5), QPointF(6.5, 20.0))
+        flag = QPainterPath()
+        flag.moveTo(6.5, 5.0)
+        flag.lineTo(18.5, 5.0)
+        flag.lineTo(15.5, 9.2)
+        flag.lineTo(18.5, 13.5)
+        flag.lineTo(6.5, 13.5)
+        painter.drawPath(flag)
     elif name == "grid":
         for x in (4.5, 13.5):
             for y in (4.5, 13.5):
