@@ -388,13 +388,13 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         font-size: 12px;
     }}
 
-    /* In-book search bar & multi-step jump-back bar */
-    QFrame#readerSearchBar {{
+    /* Sidebar book search & multi-step jump-back bar */
+    QFrame#sidebarSearchBar {{
         background: {c['side']};
         border: 1px solid {c['line']};
         border-radius: 9px;
     }}
-    QLineEdit#readerSearchInput {{
+    QLineEdit#sidebarSearchInput {{
         background: {elevated};
         border: 1px solid {c['line']};
         border-radius: 6px;
@@ -402,13 +402,21 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         min-height: 20px;
         font-size: 12.5px;
     }}
-    QLineEdit#readerSearchInput:hover {{ border-color: {line_strong}; }}
-    QLineEdit#readerSearchInput:focus {{ border-color: {c['accent']}; }}
-    QLabel#readerSearchCount {{
+    QLineEdit#sidebarSearchInput:hover {{ border-color: {line_strong}; }}
+    QLineEdit#sidebarSearchInput:focus {{ border-color: {c['accent']}; }}
+    QLabel#sidebarSearchCount {{
         color: {c['muted']};
         font-size: 11.5px;
         padding: 0 4px;
     }}
+    QLabel#searchEmptyHint {{ color: {c['muted']}; font-size: 12px; padding: 14px 8px; }}
+    QListView#searchResults {{
+        background: transparent;
+        border: none;
+        outline: 0;
+        padding: 2px;
+    }}
+    QListView#searchResults::item {{ padding: 0; border: none; }}
     QFrame#jumpBackBar {{
         background: {c['side']};
         border: 1px solid {c['line']};

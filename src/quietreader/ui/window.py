@@ -2,18 +2,26 @@ from bisect import bisect_right
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+from html import escape as html_escape
 from pathlib import Path
 import os
 import re
 import sys
 from time import time
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, QThreadPool, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import (
+    QAbstractListModel, QEvent, QItemSelectionModel, QModelIndex, QObject, QPoint,
+    QRunnable, QSize, QThreadPool, Qt, QTimer, QUrl, Signal,
+)
+from PySide6.QtGui import (
+    QAction, QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication,
+    QIcon, QKeySequence, QPainter, QShortcut, QTextDocument,
+)
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QInputDialog, QLineEdit,
-    QMessageBox, QListWidget, QListWidgetItem, QMainWindow, QMenu, QPushButton, QSizePolicy, QStackedWidget,
-    QSizeGrip, QProgressBar, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
+    QListView, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QSizeGrip, QSizePolicy, QProgressBar, QStackedWidget, QStyle, QStyledItemDelegate,
+    QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from quietreader.content.local import ENCODINGS, ImportError as BookImportError, load_book, read_epub_title
@@ -45,6 +53,10 @@ from quietreader.persistence.store import (
 from quietreader.library.shelf import SUPPORTED_SUFFIXES, ShelfError, ShelfManager, UNCLASSIFIED, book_id_for_path
 from quietreader.ui.shelf import ShelfPanel, display_title_for_record
 from quietreader.updates import ReleaseChecker, automatic_check_due
+
+_SEARCH_CHAPTER_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+_SEARCH_PAGE_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+_SEARCH_SNIPPET_ROLE = int(Qt.ItemDataRole.UserRole) + 3
 
 _SETTINGS_SLIDER_FIELDS = frozenset({
     "font_size", "line_height", "letter_spacing", "paragraph_spacing", "padding",
@@ -157,8 +169,218 @@ class _SearchLineEdit(QLineEdit):
         super().keyPressEvent(event)
 
 
+class _SearchResultModel(QAbstractListModel):
+    def __init__(self, owner, parent=None):
+        super().__init__(parent)
+        self.owner = owner
+        self.book = None
+        self.matches: list[tuple[int, int, int]] = []
+        self._entries: dict[int, tuple[str, int, tuple[str, str, str, bool, bool]]] = {}
+        self._section_page_counts: dict[int, int] = {}
+        self._chapter_starts: dict[int, tuple[int, str]] = {}
+        self._section_page_offsets: dict[int, int] = {}
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.matches)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self.matches):
+            return None
+        chapter, page, snippet = self._entry(index.row())
+        if role == Qt.ItemDataRole.DisplayRole:
+            before, match, after, clipped_left, clipped_right = snippet
+            prefix = "…" if clipped_left else ""
+            suffix = "…" if clipped_right else ""
+            return (
+                f"{chapter} · {self.owner.t('第 {page} 页', page=page)}\n"
+                f"{prefix}{before}{match}{after}{suffix}"
+            )
+        if role == _SEARCH_CHAPTER_ROLE:
+            return chapter
+        if role == _SEARCH_PAGE_ROLE:
+            return page
+        if role == _SEARCH_SNIPPET_ROLE:
+            return snippet
+        if role == Qt.ItemDataRole.ToolTipRole:
+            before, match, after, clipped_left, clipped_right = snippet
+            prefix = "…" if clipped_left else ""
+            suffix = "…" if clipped_right else ""
+            return (
+                f"{chapter} · {self.owner.t('第 {page} 页', page=page)}\n"
+                f"{prefix}{before}{match}{after}{suffix}"
+            )
+        return None
+
+    def set_matches(self, book, matches):
+        self.beginResetModel()
+        self.book = book
+        self.matches = matches
+        self._entries.clear()
+        self._section_page_counts.clear()
+        self._chapter_starts.clear()
+        self._section_page_offsets.clear()
+        self.endResetModel()
+
+    def invalidate_pages(self):
+        self._entries.clear()
+        self._section_page_counts.clear()
+        self._chapter_starts.clear()
+        self._section_page_offsets.clear()
+
+    def _chapter_start(self, section_index: int) -> tuple[int, str]:
+        cached = self._chapter_starts.get(section_index)
+        if cached is not None:
+            return cached
+        section = self.book.sections[section_index]
+        identity = self.owner._chapter_identity(section)
+        chapter_start = section_index
+        while chapter_start > 0 and self.owner._chapter_identity(self.book.sections[chapter_start - 1]) == identity:
+            chapter_start -= 1
+        chapter = self.book.sections[chapter_start].title.strip() or self.book.title
+        for index in range(chapter_start, section_index + 1):
+            self._chapter_starts[index] = (chapter_start, chapter)
+        return chapter_start, chapter
+
+    def _chapter_page_offset(self, section_index: int, chapter_start: int) -> int:
+        cached = self._section_page_offsets.get(section_index)
+        if cached is not None:
+            return cached
+        page_offset = 0
+        for index in range(chapter_start, section_index):
+            cached_offset = self._section_page_offsets.get(index)
+            if cached_offset is None:
+                self._section_page_offsets[index] = page_offset
+                cached_offset = page_offset
+            page_offset = cached_offset + self._section_page_count(index)
+        self._section_page_offsets[section_index] = page_offset
+        return page_offset
+
+    def _section_page_count(self, section_index: int) -> int:
+        if section_index not in self._section_page_counts:
+            section = self.book.sections[section_index]
+            self._section_page_counts[section_index] = max(
+                1,
+                self.owner.reader.page_for_section_offset(section, len(section.text)),
+            )
+        return self._section_page_counts[section_index]
+
+    def _entry(self, row: int) -> tuple[str, int, tuple[str, str, str, bool, bool]]:
+        cached = self._entries.get(row)
+        if cached is not None:
+            return cached
+
+        section_index, start, end = self.matches[row]
+        section = self.book.sections[section_index]
+        chapter_start, chapter = self._chapter_start(section_index)
+        page_offset = self._chapter_page_offset(section_index, chapter_start)
+        page = page_offset + self.owner.reader.page_for_section_offset(section, start)
+
+        context_start = max(0, start - 36)
+        context_end = min(len(section.text), end + 64)
+
+        def flatten(value: str) -> str:
+            value = value.replace("\ufffc", " ")
+            return re.sub(r"\s+", " ", value).strip()
+
+        snippet = (
+            flatten(section.text[context_start:start]),
+            flatten(section.text[start:end]),
+            flatten(section.text[end:context_end]),
+            context_start > 0,
+            context_end < len(section.text),
+        )
+        entry = (chapter, page, snippet)
+        self._entries[row] = entry
+        return entry
+
+
+class _SearchResultDelegate(QStyledItemDelegate):
+    ROW_HEIGHT = 112
+
+    def __init__(self, owner, parent=None):
+        super().__init__(parent)
+        self.owner = owner
+        self._palette = colors(owner.settings.theme)
+
+    def apply_palette(self, palette: dict[str, str]):
+        self._palette = dict(palette)
+
+    def sizeHint(self, option, index):
+        return QSize(max(0, option.rect.width()), self.ROW_HEIGHT)
+
+    def paint(self, painter, option, index):
+        palette = self._palette
+        card = option.rect.adjusted(3, 3, -3, -3)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        background = (
+            palette["selected"] if selected
+            else palette["accent_hover"] if hovered
+            else palette["elevated"]
+        )
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QColor(palette["accent"] if selected else palette["line"]))
+        painter.setBrush(QColor(background))
+        painter.drawRoundedRect(card, 8, 8)
+
+        chapter = str(index.data(_SEARCH_CHAPTER_ROLE) or "")
+        page = index.data(_SEARCH_PAGE_ROLE)
+        page_label = self.owner.t("第 {page} 页", page=page)
+        heading_font = QFont(option.font)
+        heading_font.setPointSizeF(9.5)
+        heading_font.setWeight(QFont.Weight.DemiBold)
+        metrics = QFontMetrics(heading_font)
+        page_width = metrics.horizontalAdvance(page_label)
+        heading = card.adjusted(8, 5, -8, 0)
+        page_rect = heading.adjusted(max(0, heading.width() - page_width), 0, 0, 0)
+        chapter_rect = heading.adjusted(0, 0, -(page_width + 8), 0)
+        painter.setFont(heading_font)
+        painter.setPen(QColor(palette["muted"]))
+        painter.drawText(
+            chapter_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            metrics.elidedText(chapter, Qt.TextElideMode.ElideRight, max(0, chapter_rect.width())),
+        )
+        painter.setPen(QColor(palette["ink_secondary"]))
+        painter.drawText(page_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, page_label)
+
+        before, match, after, clipped_left, clipped_right = index.data(_SEARCH_SNIPPET_ROLE)
+        prefix = "…" if clipped_left else ""
+        suffix = "…" if clipped_right else ""
+        highlight_style = (
+            f"background-color:{palette['accent_soft']};"
+            f"color:{palette['accent']};font-weight:700"
+        )
+        body_html = (
+            f"{html_escape(prefix + before)}"
+            f"<span style=\"{highlight_style}\">{html_escape(match)}</span>"
+            f"{html_escape(after + suffix)}"
+        )
+        body = QTextDocument()
+        body.setDocumentMargin(0)
+        body_font = QFont(option.font)
+        body_font.setPointSizeF(10.5)
+        body.setDefaultFont(body_font)
+        body.setHtml(
+            f"<p style=\"margin:0;color:{palette['ink']}\">{body_html}</p>"
+        )
+        body_rect = card.adjusted(8, 27, -8, -7)
+        body.setTextWidth(body_rect.width())
+        painter.setPen(QColor(palette["ink"]))
+        painter.save()
+        painter.setClipRect(body_rect)
+        painter.translate(body_rect.topLeft())
+        body.drawContents(painter, body_rect.translated(-body_rect.topLeft()))
+        painter.restore()
+        painter.restore()
+
+
 class _SidebarTabSwitcher(QWidget):
     """Foliate-style stacked sidebar content with a clean bottom icon switcher."""
+
+    currentChanged = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -197,10 +419,13 @@ class _SidebarTabSwitcher(QWidget):
     def setCurrentIndex(self, index: int):
         if not 0 <= index < self.stack.count():
             return
+        previous = self.stack.currentIndex()
         self.stack.setCurrentIndex(index)
         for i, (btn, _) in enumerate(self._buttons):
             btn.setChecked(i == index)
         self._refresh_icons()
+        if previous != index:
+            self.currentChanged.emit(index)
 
     def currentIndex(self) -> int:
         return self.stack.currentIndex()
@@ -215,6 +440,7 @@ class _SidebarTabSwitcher(QWidget):
         if 0 <= index < len(self._buttons):
             self._buttons[index][0].setText(text)
             self._buttons[index][0].setToolTip(text)
+            self._buttons[index][0].setAccessibleName(text)
 
     def apply_palette(self, palette: dict[str, str]):
         self._palette = dict(palette)
@@ -337,6 +563,8 @@ class MainWindow(QMainWindow):
         self._jump_history: list[tuple[int, int]] = []
         self._max_jump_history = 30
         self._search_active = False
+        self._search_return_tab = 0
+        self._last_sidebar_tab_index = 0
         self._search_matches: list[tuple[int, int, int]] = []
         self._search_index = -1
         self._search_origin: tuple[int, int] | None = None
@@ -671,6 +899,35 @@ class MainWindow(QMainWindow):
         self.landmarks.itemActivated.connect(self._page_activated)
         self.landmarks.itemClicked.connect(self._page_activated)
         self.reading_tabs.addTab(self.landmarks, "位置")
+
+        self.search_panel = QWidget()
+        search_panel_layout = QVBoxLayout(self.search_panel)
+        search_panel_layout.setContentsMargins(2, 2, 2, 0)
+        search_panel_layout.setSpacing(6)
+        self.search_empty_label = QLabel("输入关键词搜索全书", self.search_panel)
+        self.search_empty_label.setObjectName("searchEmptyHint")
+        self.search_empty_label.setWordWrap(True)
+        self.search_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        search_panel_layout.addWidget(self.search_empty_label, 1)
+        self.search_results = QListView(self.search_panel)
+        self.search_results.setObjectName("searchResults")
+        self.search_results.setAccessibleName("全书搜索结果")
+        self.search_results.setProperty("translation_accessible", "搜索结果")
+        self.search_results.setUniformItemSizes(True)
+        self.search_results.setSpacing(2)
+        self.search_results.setMouseTracking(True)
+        self.search_result_model = _SearchResultModel(self, self.search_results)
+        self.search_result_delegate = _SearchResultDelegate(self, self.search_results)
+        self._themed_controls.append(self.search_result_delegate)
+        self.search_results.setModel(self.search_result_model)
+        self.search_results.setItemDelegate(self.search_result_delegate)
+        self.search_results.clicked.connect(self._search_result_activated)
+        self.search_results.activated.connect(self._search_result_activated)
+        self.search_results.hide()
+        search_panel_layout.addWidget(self.search_results, 1)
+        self.search_tab_index = self.reading_tabs.addTab(self.search_panel, "搜索", "search")
+        self.reading_tabs.currentChanged.connect(self._on_reading_tab_changed)
+        self.reading_tabs.setTabVisible(self.search_tab_index, False)
         self.reading_tabs.setTabVisible(2, True)
         self.reading_tabs.setTabVisible(3, False)
         self.reading_tabs.setTabVisible(4, False)
@@ -702,18 +959,21 @@ class MainWindow(QMainWindow):
         self.chapter_title = self._label("从你的本地书籍开始", "chapterTitle")
         self.chapter_title.hide()
 
-        self.search_bar = QFrame(self.reader_page)
-        self.search_bar.setObjectName("readerSearchBar")
-        self.search_bar.setFixedHeight(32)
-        search_layout = QHBoxLayout(self.search_bar)
-        search_layout.setContentsMargins(8, 2, 6, 2)
-        search_layout.setSpacing(4)
+        self.search_bar = QFrame(self.search_panel)
+        self.search_bar.setObjectName("sidebarSearchBar")
+        self.search_bar.setFixedHeight(64)
+        search_layout = QVBoxLayout(self.search_bar)
+        search_layout.setContentsMargins(4, 4, 4, 4)
+        search_layout.setSpacing(3)
+        search_input_layout = QHBoxLayout()
+        search_input_layout.setContentsMargins(0, 0, 0, 0)
+        search_input_layout.setSpacing(4)
         self.search_icon_label = QLabel(self.search_bar)
         self.search_icon_label.setFixedSize(16, 16)
         self.search_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        search_layout.addWidget(self.search_icon_label)
+        search_input_layout.addWidget(self.search_icon_label)
         self.search_input = _SearchLineEdit(self.search_bar)
-        self.search_input.setObjectName("readerSearchInput")
+        self.search_input.setObjectName("sidebarSearchInput")
         self.search_input.setMinimumWidth(40)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setPlaceholderText("搜索全书内容…")
@@ -723,30 +983,38 @@ class MainWindow(QMainWindow):
         self.search_input.next_requested.connect(self.find_next_match)
         self.search_input.previous_requested.connect(self.find_previous_match)
         self.search_input.close_requested.connect(self.close_book_search)
-        search_layout.addWidget(self.search_input, 1)
+        search_input_layout.addWidget(self.search_input, 1)
+        search_layout.addLayout(search_input_layout)
+
+        search_controls_layout = QHBoxLayout()
+        search_controls_layout.setContentsMargins(0, 0, 0, 0)
+        search_controls_layout.setSpacing(2)
         self.search_count_label = QLabel("", self.search_bar)
-        self.search_count_label.setObjectName("readerSearchCount")
-        self.search_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        search_layout.addWidget(self.search_count_label)
+        self.search_count_label.setObjectName("sidebarSearchCount")
+        self.search_count_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.search_count_label.setMinimumWidth(0)
+        search_controls_layout.addWidget(self.search_count_label)
+        search_controls_layout.addStretch(1)
         self.search_prev_button = self._icon_button(
             "chevron_up", self.find_previous_match, "上一个匹配 (Shift+Enter)",
-            size=13, fixed_size=(24, 24),
+            size=13, fixed_size=(22, 22),
         )
         self.search_next_button = self._icon_button(
             "chevron_down", self.find_next_match, "下一个匹配 (Enter)",
-            size=13, fixed_size=(24, 24),
+            size=13, fixed_size=(22, 22),
         )
         self.search_close_button = self._icon_button(
             "close", self.close_book_search, "关闭搜索 (Esc)",
-            size=12, fixed_size=(24, 24),
+            size=12, fixed_size=(22, 22),
         )
         self.search_prev_button.setEnabled(False)
         self.search_next_button.setEnabled(False)
-        search_layout.addWidget(self.search_prev_button)
-        search_layout.addWidget(self.search_next_button)
-        search_layout.addWidget(self.search_close_button)
+        search_controls_layout.addWidget(self.search_prev_button)
+        search_controls_layout.addWidget(self.search_next_button)
+        search_controls_layout.addWidget(self.search_close_button)
+        search_layout.addLayout(search_controls_layout)
         self.search_bar.hide()
-        reading.addWidget(self.search_bar)
+        search_panel_layout.insertWidget(0, self.search_bar)
 
         self.reader = PageView()
         self.reader.turned.connect(self.turn_page)
@@ -872,7 +1140,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.encoding_bar)
         self.chrome_widgets = [
             header, self.shelf_narrow_bar, self.hotkey_notice, self.sidebar,
-            self.search_bar, self.jump_back_bar, self.progress,
+            self.jump_back_bar, self.progress,
             self.reader_navigation, bottom_widget, self.encoding_bar,
         ]
         self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
@@ -1409,6 +1677,7 @@ class MainWindow(QMainWindow):
         self.pages.clear()
         self.landmarks.clear()
         self.bookmarks.clear()
+        self.reading_tabs.setTabVisible(self.search_tab_index, False)
         self.book_info.set_book(None, self.settings.language)
         self.progress.setValue(0)
         self.page_label.setText("PageUp / PageDown")
@@ -1479,6 +1748,7 @@ class MainWindow(QMainWindow):
         self.book_title.setProperty("translation_source", None)
         self.book_info.set_book(book, self.settings.language, display_title=display_title)
         self.reading_tabs.setTabVisible(2, True)
+        self.reading_tabs.setTabVisible(self.search_tab_index, True)
         self._refresh_bookmarks()
         self.chapters.clear()
         self.pages.clear()
@@ -1614,6 +1884,9 @@ class MainWindow(QMainWindow):
 
     def _on_reader_reflowed(self):
         self._sync_search_bar_responsive()
+        if hasattr(self, "search_result_model"):
+            self.search_result_model.invalidate_pages()
+            self.search_results.viewport().update()
         self._update_progress()
         self._update_jump_back_bar()
 
@@ -1632,20 +1905,54 @@ class MainWindow(QMainWindow):
     def _is_search_bar_open(self) -> bool:
         return bool(
             self._search_active
-            and hasattr(self, "search_bar")
-            and not self.search_bar.isHidden()
+            and self.book
             and self.main_pages.currentWidget() is self.reader_page
         )
 
     def _sync_search_bar_responsive(self):
         if not hasattr(self, "search_bar") or not hasattr(self, "search_icon_label"):
             return
-        bar_w = self.reader.width() if self.reader.width() > 60 else self.search_bar.width()
+        bar_w = self.search_panel.width() if self.search_panel.width() > 60 else self.search_bar.width()
         if bar_w <= 60:
-            bar_w = max(200, self.width() - 24)
-        self.search_icon_label.setVisible(bar_w >= 240)
+            bar_w = max(150, self.sidebar.width())
+        self.search_icon_label.setVisible(bar_w >= 210)
+        self.search_count_label.setVisible(bar_w >= 178)
 
-    def open_book_search(self):
+    def _on_reading_tab_changed(self, index: int):
+        if index == self.search_tab_index:
+            if not self.book:
+                self.reading_tabs.setCurrentIndex(self._last_sidebar_tab_index)
+            elif not self._search_active:
+                self._search_return_tab = self._last_sidebar_tab_index
+                self.open_book_search(focus_input=True)
+            return
+        self._last_sidebar_tab_index = index
+        if self._search_active:
+            self._search_return_tab = index
+
+    def _set_search_results_state(self, query: str):
+        has_results = bool(self._search_matches)
+        self.search_results.setVisible(has_results)
+        self.search_empty_label.setVisible(not has_results)
+        if not has_results:
+            source = "无匹配" if query else "输入关键词搜索全书"
+            self.search_empty_label.setText(self.t(source))
+
+    def _sync_search_result_selection(self, match_index: int):
+        if not 0 <= match_index < len(self._search_matches):
+            return
+        model_index = self.search_result_model.index(match_index, 0)
+        self.search_results.selectionModel().setCurrentIndex(
+            model_index, QItemSelectionModel.SelectionFlag.ClearAndSelect,
+        )
+        self.search_results.scrollTo(model_index)
+
+    def _search_result_activated(self, model_index: QModelIndex):
+        if model_index.isValid():
+            self._go_to_search_match(model_index.row())
+            self.reader.setFocus()
+
+    def open_book_search(self, focus_input=True):
         if self.focus_mode or not self.book:
             return
         if hasattr(self, "appearance_popover"):
@@ -1658,12 +1965,19 @@ class MainWindow(QMainWindow):
         if self.main_pages.currentWidget() is not self.reader_page:
             self.show_reading_page()
         if not self._search_active:
+            current_tab = self.reading_tabs.currentIndex()
+            self._search_return_tab = (
+                current_tab if current_tab != self.search_tab_index else self._last_sidebar_tab_index
+            )
             self._search_active = True
             self._search_origin = (self.section_index, self.reader.offset)
             self._search_origin_pushed = False
             self.search_bar.show()
-            self.reading_layout.invalidate()
-            self.reading_layout.activate()
+        elif self.reading_tabs.currentIndex() != self.search_tab_index:
+            self._search_return_tab = self.reading_tabs.currentIndex()
+
+        self.sidebar_collapsed = False
+        self.reading_tabs.setCurrentIndex(self.search_tab_index)
         self._sync_page_navigation()
         self._sync_search_bar_responsive()
         selected = self.reader.selection.selectedText().replace("\u2029", "\n").strip()
@@ -1679,9 +1993,12 @@ class MainWindow(QMainWindow):
                     self.search_input.blockSignals(False)
         if self.search_input.text():
             self._run_book_search(navigate=False, anchor=anchor_override)
+        else:
+            self._set_search_results_state("")
         self._update_jump_back_bar()
-        self.search_input.setFocus()
-        self.search_input.selectAll()
+        if focus_input:
+            self.search_input.setFocus()
+            self.search_input.selectAll()
 
     def close_book_search(self, checked=False, *, focus_reader=True, clear_query=False):
         was_active = self._search_active
@@ -1690,17 +2007,29 @@ class MainWindow(QMainWindow):
         self._search_index = -1
         self._search_origin = None
         self._search_origin_pushed = False
+        self.search_result_model.set_matches(None if clear_query else self.book, [])
+        self.search_results.hide()
+        self.search_empty_label.setText(self.t("输入关键词搜索全书"))
+        self.search_empty_label.show()
+        self.search_count_label.setText("")
+        self.search_prev_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
         if clear_query and hasattr(self, "search_input"):
             self.search_input.blockSignals(True)
             self.search_input.clear()
             self.search_input.blockSignals(False)
-            self.search_count_label.setText("")
-            self.search_prev_button.setEnabled(False)
-            self.search_next_button.setEnabled(False)
         if hasattr(self, "search_bar") and not self.search_bar.isHidden():
             self.search_bar.hide()
-            self.reading_layout.invalidate()
-            self.reading_layout.activate()
+        if (
+            was_active
+            and self.reading_tabs.currentIndex() == self.search_tab_index
+            and 0 <= self._search_return_tab < self.reading_tabs.stack.count()
+        ):
+            self.reading_tabs.setCurrentIndex(self._search_return_tab)
+        if was_active:
+            self.sidebar_collapsed = (
+                self.width() < NARROW_BREAKPOINT or self._user_sidebar_collapsed
+            )
         if hasattr(self, "reader"):
             self.reader.set_search_highlights([], None)
         self._sync_page_navigation()
@@ -1720,6 +2049,8 @@ class MainWindow(QMainWindow):
         if not query:
             self._search_matches = []
             self._search_index = -1
+            self.search_result_model.set_matches(self.book, [])
+            self._set_search_results_state("")
             self.search_count_label.setText("")
             self.search_prev_button.setEnabled(False)
             self.search_next_button.setEnabled(False)
@@ -1731,6 +2062,8 @@ class MainWindow(QMainWindow):
             for match in pattern.finditer(section.text):
                 matches.append((sec_idx, match.start(), match.end()))
         self._search_matches = matches
+        self.search_result_model.set_matches(self.book, matches)
+        self._set_search_results_state(query)
         if not matches:
             self._search_index = -1
             self.search_count_label.setText(self.t("无匹配"))
@@ -1754,6 +2087,7 @@ class MainWindow(QMainWindow):
         else:
             self._search_index = chosen
             self.search_count_label.setText(f"{chosen + 1} / {len(matches)}")
+            self._sync_search_result_selection(chosen)
             self._sync_reader_search_highlights()
 
     def find_next_match(self):
@@ -1774,6 +2108,7 @@ class MainWindow(QMainWindow):
         self._search_index = match_index
         sec_idx, start_off, _end_off = self._search_matches[match_index]
         self.search_count_label.setText(f"{match_index + 1} / {len(self._search_matches)}")
+        self._sync_search_result_selection(match_index)
         origin = self._search_origin if self._search_origin is not None else (self.section_index, self.reader.offset)
         dest = (sec_idx, start_off)
         if not self._same_section_page(origin, dest):
@@ -2288,9 +2623,13 @@ class MainWindow(QMainWindow):
         if is_narrow != self._was_narrow:
             self._was_narrow = is_narrow
             if is_narrow:
-                self.sidebar_collapsed = True
+                self.sidebar_collapsed = not (
+                    self._search_active and self.reading_tabs.currentIndex() == self.search_tab_index
+                )
             else:
-                self.sidebar_collapsed = self._user_sidebar_collapsed
+                self.sidebar_collapsed = self._user_sidebar_collapsed and not (
+                    self._search_active and self.reading_tabs.currentIndex() == self.search_tab_index
+                )
             self._sync_sidebar_toggle_visual()
 
         if hasattr(self, "settings_back_button"):
@@ -2675,12 +3014,13 @@ class MainWindow(QMainWindow):
         self.reading_button.setText(self.t("阅读"))
         self.shelf_button.setText(self.t("书架"))
         self._update_window_controls()
-        for index, source in enumerate(("目录", "书签", "资料", "页码", "位置")):
+        for index, source in enumerate(("目录", "书签", "资料", "页码", "位置", "搜索")):
             self.reading_tabs.setTabText(index, self.t(source))
         if hasattr(self, "toc_filter"):
             self.toc_filter.setPlaceholderText(self.t("筛选目录…"))
         if hasattr(self, "search_input"):
             self.search_input.setPlaceholderText(self.t("搜索全书内容…"))
+            self._set_search_results_state(self.search_input.text())
             if self._search_active and self.search_input.text() and not self._search_matches:
                 self.search_count_label.setText(self.t("无匹配"))
         self.shelf.retranslate(self.settings.language)
