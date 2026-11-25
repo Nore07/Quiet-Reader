@@ -142,7 +142,7 @@ class SettingsDialog(QDialog):
         self.note("PageUp / PageDown 在正文翻页、在摸鱼模式逐句翻页；Ctrl+PageUp / Ctrl+PageDown 切换章节。")
         self.note("专注模式仅显示正文，F10（可修改）或 Esc 退出，也可从托盘或正文右键菜单退出。")
         self.note("专注模式下按快捷键在 0% 和 100% 背景透明度间切换，默认 F9；按住调整键时，仅当背景为 0% 才临时提高到 1% 以接收鼠标操作，松开后恢复；其他透明度保持不变。")
-        self.note("摸鱼模式默认显示一行，鼠标靠近时显示、离开后隐藏；滚轮逐句翻页，按住 Alt 拖动可将细条移到 IDE 状态栏附近。模式热键在摸鱼模式开启期间全局生效，包括细条自动隐藏时。")
+        self.note("摸鱼模式默认显示一行，鼠标靠近时显示、离开后隐藏；滚轮逐句翻页，按住专注模式配置的调整键拖动可将细条移到 IDE 状态栏附近。模式热键在摸鱼模式开启期间全局生效，包括细条自动隐藏时。")
         self.note(GLOBAL_HOTKEY_DESCRIPTION)
         self.note("紧急退出会尝试保存当前位置，随后直接退出，无需等待后台导入完成。")
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.RestoreDefaults)

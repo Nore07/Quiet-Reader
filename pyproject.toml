@@ -36,4 +36,4 @@ quietreader = "quietreader.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-quietreader = ["assets/*.png"]
+quietreader = ["assets/*.png", "assets/*.svg"]

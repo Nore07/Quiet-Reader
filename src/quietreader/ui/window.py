@@ -2859,7 +2859,7 @@ class MainWindow(QMainWindow):
                 sampled_complex=self._sampled_focus_complex,
             )
         if hasattr(self, "tray_focus_action"):
-            self.tray_focus_action.setEnabled(ready)
+            self.tray_focus_action.setEnabled(ready and not self.moyu_mode)
         if hasattr(self, "tray_moyu_action"):
             self.tray_moyu_action.setEnabled(ready)
         if ready:
@@ -3442,18 +3442,34 @@ class MainWindow(QMainWindow):
             return
         section = self.book.sections[self.section_index]
         self._moyu_sentences = sentence_spans(section.text)
-        self._moyu_sentence_index = sentence_index_for_offset(
-            self._moyu_sentences,
-            self.reader.offset if offset is None else max(0, int(offset)),
-        )
+        requested_offset = self.reader.offset if offset is None else max(0, int(offset))
+        self._show_moyu_fragment(requested_offset)
+
+    def _show_moyu_fragment(self, offset):
+        if not self.book or not 0 <= self.section_index < len(self.book.sections):
+            return False
+        section = self.book.sections[self.section_index]
+        requested_offset = max(0, min(len(section.text), int(offset)))
+        sentence_index = sentence_index_for_offset(self._moyu_sentences, requested_offset)
+        self._moyu_sentence_index = sentence_index
         if self._moyu_sentence_index < 0:
             self._moyu_offset = 0
+            self.reader.offset = 0
             self.moyu_strip.set_sentence("")
-            return
+            return False
         start, end = self._moyu_sentences[self._moyu_sentence_index]
-        self._moyu_offset = start
-        self.reader.offset = start
-        self.moyu_strip.set_sentence(section.text[start:end])
+        fragment_offset = requested_offset if start <= requested_offset < end else start
+        self._moyu_offset = fragment_offset
+        self.reader.offset = fragment_offset
+        self.moyu_strip.set_sentence(
+            section.text[fragment_offset:end], source_offset=fragment_offset,
+        )
+        return True
+
+    def _push_moyu_fragment_history(self):
+        self._moyu_fragment_history.append((self.section_index, self._moyu_offset))
+        if len(self._moyu_fragment_history) > 512:
+            del self._moyu_fragment_history[:-512]
 
     def _position_moyu_bar(self, *, default=False):
         screen = self.screen() or QGuiApplication.primaryScreen()
@@ -3508,9 +3524,9 @@ class MainWindow(QMainWindow):
             self._moyu_visibility_timer.stop()
             self._moyu_hide_timer.stop()
             return
-        alt_pressed = bool(QGuiApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.AltModifier)
-        self._set_focus_adjust_active(alt_pressed)
-        if self.moyu_strip.interaction_active and not alt_pressed:
+        adjust_key_pressed = self.moyu_strip.adjustment_key_is_pressed()
+        self._set_focus_adjust_active(adjust_key_pressed)
+        if self.moyu_strip.interaction_active and not adjust_key_pressed:
             self.moyu_strip.cancel_interaction()
         if self.moyu_strip.interaction_active:
             self._moyu_hide_timer.stop()
@@ -3637,37 +3653,52 @@ class MainWindow(QMainWindow):
             return
 
         if direction > 0:
-            overflow = self.moyu_strip.overflow_text
-            if overflow:
-                self._moyu_fragment_history.append(self.moyu_strip.sentence_text)
-                self.moyu_strip.set_sentence(overflow)
+            overflow_offset = self.moyu_strip.overflow_source_offset
+            if 0 <= self._moyu_sentence_index < len(self._moyu_sentences):
+                _sentence_start, sentence_end = self._moyu_sentences[self._moyu_sentence_index]
+            else:
+                sentence_end = self._moyu_offset
+            if overflow_offset is not None and self._moyu_offset < overflow_offset < sentence_end:
+                self._push_moyu_fragment_history()
+                self._show_moyu_fragment(overflow_offset)
                 self._update_progress()
                 self.schedule_save()
                 return
         elif self._moyu_fragment_history:
-            self.moyu_strip.set_sentence(self._moyu_fragment_history.pop())
+            previous_section, previous_offset = self._moyu_fragment_history.pop()
+            remaining_history = self._moyu_fragment_history.copy()
+            if previous_section != self.section_index:
+                self.open_section(previous_section, previous_offset)
+                self._moyu_fragment_history = remaining_history
+            else:
+                self._show_moyu_fragment(previous_offset)
             self._update_progress()
             self.schedule_save()
             return
 
         target = self._moyu_sentence_index + direction
         if 0 <= target < len(self._moyu_sentences):
+            if direction > 0:
+                self._push_moyu_fragment_history()
             self._moyu_sentence_index = target
-            self._moyu_fragment_history = []
             start, end = self._moyu_sentences[target]
-            self._moyu_offset = start
-            self.reader.offset = start
-            self.moyu_strip.set_sentence(self.book.sections[self.section_index].text[start:end])
+            self._show_moyu_fragment(start)
             self._update_progress()
             self.schedule_save()
             return
 
         candidate = self.section_index + direction
+        previous_history = self._moyu_fragment_history.copy()
+        if direction > 0:
+            previous_history.append((self.section_index, self._moyu_offset))
+            if len(previous_history) > 512:
+                del previous_history[:-512]
         while 0 <= candidate < len(self.book.sections):
             section = self.book.sections[candidate]
             offset = 0 if direction > 0 else len(section.text)
             self.open_section(candidate, offset)
             if self._moyu_sentences:
+                self._moyu_fragment_history = previous_history
                 break
             candidate += direction
 
@@ -3805,8 +3836,10 @@ class MainWindow(QMainWindow):
         self.focus_button.setAccessibleName(focus_label)
         self._update_sidebar_toggle()
         if hasattr(self, "tray_focus_action"):
-            self.tray_focus_action.setText(self.t("退出专注模式" if self.focus_mode else "进入专注模式"))
-            self.tray_focus_action.setChecked(self.focus_mode)
+            focus_active = self.focus_mode and not self.moyu_mode
+            self.tray_focus_action.setText(self.t("退出专注模式" if focus_active else "进入专注模式"))
+            self.tray_focus_action.setChecked(focus_active)
+            self.tray_focus_action.setEnabled(bool(self.book and not self.loading and not self.moyu_mode))
         if hasattr(self, "tray_moyu_action"):
             self.tray_moyu_action.setText(self.t("退出摸鱼模式" if self.moyu_mode else "进入摸鱼模式"))
             self.tray_moyu_action.setChecked(self.moyu_mode)
@@ -3987,6 +4020,7 @@ class MainWindow(QMainWindow):
             theme=settings.theme,
             language=settings.language,
             font_family=settings.font_family,
+            adjust_key=settings.focus_adjust_key,
             background_color=self._sampled_focus_color if self.moyu_mode else "",
         )
         if self.moyu_mode:

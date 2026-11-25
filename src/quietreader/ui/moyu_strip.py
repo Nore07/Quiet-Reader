@@ -91,9 +91,13 @@ class MoyuStrip(QWidget):
         super().__init__(parent)
         self._wheel_page_accumulator = WheelPageAccumulator(self.turn_requested.emit, self)
         self._source_sentence = ""
+        self._source_offset = 0
+        self._display_source_offsets = []
+        self._qt_to_python = [0]
         self._sentence = ""
         self._line_count = 1
         self._language = "system"
+        self._adjust_key = "Alt"
         self._theme = "system"
         self._background_color = ""
         self._background_opacity = 1.0
@@ -104,7 +108,7 @@ class MoyuStrip(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self.setAccessibleName(tr("摸鱼模式阅读条", self._language))
-        self.setToolTip(self._interaction_hint(self._language))
+        self.setToolTip(self._interaction_hint(self._language, self._adjust_key))
         self._sync_height()
 
     @property
@@ -117,10 +121,21 @@ class MoyuStrip(QWidget):
 
     @property
     def overflow_text(self):
-        _font, _lines, overflow_start = self._layout_lines()
+        overflow_start = self._overflow_start()
         if overflow_start is None:
             return ""
         return self._sentence[overflow_start:].lstrip()
+
+    @property
+    def overflow_source_offset(self):
+        overflow_start = self._overflow_start()
+        if overflow_start is None:
+            return None
+        while overflow_start < len(self._sentence) and self._sentence[overflow_start].isspace():
+            overflow_start += 1
+        if overflow_start < len(self._display_source_offsets):
+            return self._display_source_offsets[overflow_start]
+        return self._source_offset + len(self._source_sentence)
 
     @property
     def preferred_height(self):
@@ -131,26 +146,28 @@ class MoyuStrip(QWidget):
         return self._drag_state is not None
 
     @staticmethod
-    def _interaction_hint(language):
+    def _interaction_hint(language, adjust_key):
         return tr(
-            "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 Alt 并拖动可移动，按住 Alt 拖动边缘或角落可调整大小。",
-            language,
+            "鼠标靠近时显示；离开后自动隐藏。滚轮逐句翻页；按住 {key} 并拖动可移动，按住 {key} 拖动边缘或角落可调整大小。",
+            language, key=adjust_key,
         )
 
     def set_preferences(
-        self, *, lines: int, theme: str, language: str, font_family: str, background_color="",
+        self, *, lines: int, theme: str, language: str, font_family: str,
+        adjust_key: str = "Alt", background_color="",
     ):
         self._line_count = 1 if lines == 1 else 2
         self._theme = theme
         language_changed = language != self._language
         self._language = language
+        self._adjust_key = adjust_key if adjust_key in ("Alt", "Ctrl", "Shift") else "Alt"
         self._font_family = font_family
         self._background_color = background_color or ""
         self._palette = colors(theme, self._background_color)
         self.setAccessibleName(tr("摸鱼模式阅读条", language))
         if language_changed:
             self._render_sentence()
-        self.setToolTip(self._interaction_hint(language))
+        self.setToolTip(self._interaction_hint(language, self._adjust_key))
         self._sync_height()
         self.update()
 
@@ -176,20 +193,67 @@ class MoyuStrip(QWidget):
         self._adjust_outline = active
         self.update()
 
-    def set_sentence(self, sentence: str):
-        self._source_sentence = sentence
+    def set_sentence(self, sentence: str, *, source_offset: int = 0):
+        self._source_sentence = sentence or ""
+        self._source_offset = max(0, int(source_offset))
         self._render_sentence()
 
     def _render_sentence(self):
         illustration_label = tr("(此处有插图)", self._language)
-        self._sentence = " ".join(
-            self._source_sentence.replace("\ufffc", f" {illustration_label} ")
-            .replace("\u2028", " ").replace("\u2029", " ").split()
-        )
+        rendered = []
+        source_offsets = []
+
+        def append(character, source_index):
+            rendered.append(character)
+            source_offsets.append(source_index)
+
+        def append_space(source_index):
+            if rendered and not rendered[-1].isspace():
+                append(" ", source_index)
+
+        source = self._source_sentence
+        index = 0
+        while index < len(source):
+            character = source[index]
+            absolute_index = self._source_offset + index
+            if character == "\ufffc":
+                append_space(absolute_index)
+                for label_index, label_character in enumerate(illustration_label):
+                    append(label_character, absolute_index if label_index == 0 else absolute_index + 1)
+                if index + 1 < len(source) and not source[index + 1].isspace():
+                    append_space(absolute_index + 1)
+                index += 1
+                continue
+            if character.isspace():
+                while index < len(source) and source[index].isspace():
+                    index += 1
+                if rendered and index < len(source):
+                    append_space(self._source_offset + index)
+                continue
+            append(character, absolute_index)
+            index += 1
+
+        self._sentence = "".join(rendered)
+        self._display_source_offsets = source_offsets
+        qt_to_python = [0]
+        for python_index, character in enumerate(self._sentence):
+            if ord(character) > 0xFFFF:
+                qt_to_python.append(python_index)
+            qt_to_python.append(python_index + 1)
+        self._qt_to_python = qt_to_python
         self.update()
 
+    def _overflow_start(self):
+        return self._layout_lines()[2]
+
+    def _python_index_for_qt(self, qt_offset):
+        if not self._qt_to_python:
+            return 0
+        index = max(0, min(int(qt_offset), len(self._qt_to_python) - 1))
+        return self._qt_to_python[index]
+
     def set_hotkey_tooltip(self, message: str):
-        hint = self._interaction_hint(self._language)
+        hint = self._interaction_hint(self._language, self._adjust_key)
         self.setToolTip(f"{hint}\n{message}" if message else hint)
 
     def _sync_height(self):
@@ -225,17 +289,19 @@ class MoyuStrip(QWidget):
         drawn_lines = []
         overflow_start = None
         for row, (start, count) in enumerate(ranges):
-            end = start + count
-            raw_segment = self._sentence[start:end]
+            qt_end = start + count
+            python_start = self._python_index_for_qt(start)
+            python_end = self._python_index_for_qt(qt_end)
+            raw_segment = self._sentence[python_start:python_end]
             segment = raw_segment.strip()
-            has_more = row == len(ranges) - 1 and bool(self._sentence[end:].strip())
+            has_more = row == len(ranges) - 1 and bool(self._sentence[python_end:].strip())
             if has_more:
                 segment = metrics.elidedText(
                     segment + "…", Qt.TextElideMode.ElideRight, int(text_rect.width()),
                 )
                 visible_segment = segment[:-1] if segment.endswith("…") else segment
                 leading_whitespace = len(raw_segment) - len(raw_segment.lstrip())
-                overflow_start = start + leading_whitespace + len(visible_segment)
+                overflow_start = python_start + leading_whitespace + len(visible_segment)
             drawn_lines.append((segment, QPointF(text_rect.left(), baseline + row * metrics.height())))
         return font, drawn_lines, overflow_start
 
@@ -354,14 +420,18 @@ class MoyuStrip(QWidget):
         self._drag_state = None
         self.unsetCursor()
 
-    @staticmethod
-    def _alt_is_pressed(event=None):
-        if event is not None and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+    def adjustment_key_is_pressed(self, event=None):
+        modifier = {
+            "Alt": Qt.KeyboardModifier.AltModifier,
+            "Ctrl": Qt.KeyboardModifier.ControlModifier,
+            "Shift": Qt.KeyboardModifier.ShiftModifier,
+        }.get(self._adjust_key, Qt.KeyboardModifier.AltModifier)
+        if event is not None and event.modifiers() & modifier:
             return True
-        return bool(QGuiApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        return bool(QGuiApplication.queryKeyboardModifiers() & modifier)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._alt_is_pressed(event):
+        if event.button() == Qt.MouseButton.LeftButton and self.adjustment_key_is_pressed(event):
             window = self.window()
             global_position = event.globalPosition().toPoint()
             edges = self._resize_edges_at(event.position().toPoint())
@@ -387,7 +457,7 @@ class MoyuStrip(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._drag_state is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            if not self._alt_is_pressed(event):
+            if not self.adjustment_key_is_pressed(event):
                 self.cancel_interaction()
                 event.accept()
                 return
@@ -404,7 +474,7 @@ class MoyuStrip(QWidget):
             event.accept()
             return
         if event.buttons() == Qt.MouseButton.NoButton:
-            if self._alt_is_pressed(event):
+            if self.adjustment_key_is_pressed(event):
                 edges = self._resize_edges_at(event.position().toPoint())
                 self.setCursor(self._resize_cursor(edges) if edges else Qt.CursorShape.SizeAllCursor)
             else:
