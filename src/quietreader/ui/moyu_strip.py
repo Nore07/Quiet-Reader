@@ -90,6 +90,7 @@ class MoyuStrip(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._wheel_page_accumulator = WheelPageAccumulator(self.turn_requested.emit, self)
+        self._source_sentence = ""
         self._sentence = ""
         self._line_count = 1
         self._language = "system"
@@ -141,11 +142,14 @@ class MoyuStrip(QWidget):
     ):
         self._line_count = 1 if lines == 1 else 2
         self._theme = theme
+        language_changed = language != self._language
         self._language = language
         self._font_family = font_family
         self._background_color = background_color or ""
         self._palette = colors(theme, self._background_color)
         self.setAccessibleName(tr("摸鱼模式阅读条", language))
+        if language_changed:
+            self._render_sentence()
         self.setToolTip(self._interaction_hint(language))
         self._sync_height()
         self.update()
@@ -173,8 +177,14 @@ class MoyuStrip(QWidget):
         self.update()
 
     def set_sentence(self, sentence: str):
+        self._source_sentence = sentence
+        self._render_sentence()
+
+    def _render_sentence(self):
+        illustration_label = tr("(此处有插图)", self._language)
         self._sentence = " ".join(
-            sentence.replace("\ufffc", " ").replace("\u2028", " ").replace("\u2029", " ").split()
+            self._source_sentence.replace("\ufffc", f" {illustration_label} ")
+            .replace("\u2028", " ").replace("\u2029", " ").split()
         )
         self.update()
 
