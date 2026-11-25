@@ -1,7 +1,7 @@
 from bisect import bisect_left, bisect_right
 import math
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, QSizeF, Qt, Signal, QUrl
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, QSizeF, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout, QColor, QFont, QGuiApplication, QKeySequence,
     QPainter, QPalette, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QImageReader,
@@ -80,6 +80,10 @@ class PageView(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._resize_reflow_timer = QTimer(self)
+        self._resize_reflow_timer.setSingleShot(True)
+        self._resize_reflow_timer.setInterval(160)
+        self._resize_reflow_timer.timeout.connect(self.reflow)
         self.settings = Settings()
         self.focus_mode = False
         self.focus_background_override = ""
@@ -116,7 +120,7 @@ class PageView(QWidget):
             size = reader.size()
             if not size.isValid() or size.width() * size.height() > 32000000:
                 data.deleteLater()
-                raise ValueError("Unsupported or oversized EPUB illustration")
+                raise ValueError("Unsupported or oversized book image")
             reader.setAutoTransform(True)
             budget_edge = int(math.sqrt(16000000 / max(1, len(images or {}))))
             edge = min(2000, max(64, budget_edge))
@@ -124,13 +128,14 @@ class PageView(QWidget):
             image = reader.read()
             data.deleteLater()
             if image.isNull():
-                raise ValueError("Cannot decode EPUB illustration")
+                raise ValueError("Cannot decode book image")
             name = QUrl(f"quietreader-image:{position}")
             document.addResource(QTextDocument.ResourceType.ImageResource, name, image)
             loaded[position] = (name, image.size())
         return loaded
 
     def set_text(self, text: str, offset=0, images=None, links=None, formats=None):
+        self._resize_reflow_timer.stop()
         self.text = text
         self._offset_map = _TextOffsetMap(text)
         self.offset = max(0, min(len(text), offset))
@@ -163,6 +168,7 @@ class PageView(QWidget):
         return self.focus_background_override or self.settings.background_color
 
     def apply_settings(self, settings):
+        self._resize_reflow_timer.stop()
         self.settings = settings
         self.reflow()
 
@@ -378,7 +384,7 @@ class PageView(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.reflow()
+        self._resize_reflow_timer.start()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -399,7 +405,7 @@ class PageView(QWidget):
             painter.drawText(box, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, tr("把喧闹\n留在书页之外。", self.settings.language))
             painter.setFont(QFont("Microsoft YaHei", 10))
             painter.setPen(QColor(c["muted"]))
-            painter.drawText(box.adjusted(0, 160, 0, 0), Qt.AlignmentFlag.AlignCenter, tr("添加一本 TXT 或 EPUB\n文件与进度，只保存在这台电脑。", self.settings.language))
+            painter.drawText(box.adjusted(0, 160, 0, 0), Qt.AlignmentFlag.AlignCenter, tr("添加一本 TXT、EPUB 或 PDF\n文件与进度，只保存在这台电脑。", self.settings.language))
             return
         pad = self.settings.padding
         painter.setClipRect(QRectF(pad, pad, max(1, self.width() - 2 * pad), self.page_height))

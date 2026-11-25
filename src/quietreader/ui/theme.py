@@ -388,13 +388,13 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         font-size: 12px;
     }}
 
-    /* In-book search bar & multi-step jump-back bar */
-    QFrame#readerSearchBar {{
+    /* Sidebar book search & multi-step jump-back bar */
+    QFrame#sidebarSearchBar {{
         background: {c['side']};
         border: 1px solid {c['line']};
         border-radius: 9px;
     }}
-    QLineEdit#readerSearchInput {{
+    QLineEdit#sidebarSearchInput {{
         background: {elevated};
         border: 1px solid {c['line']};
         border-radius: 6px;
@@ -402,42 +402,44 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         min-height: 20px;
         font-size: 12.5px;
     }}
-    QLineEdit#readerSearchInput:hover {{ border-color: {line_strong}; }}
-    QLineEdit#readerSearchInput:focus {{ border-color: {c['accent']}; }}
-    QLabel#readerSearchCount {{
+    QLineEdit#sidebarSearchInput:hover {{ border-color: {line_strong}; }}
+    QLineEdit#sidebarSearchInput:focus {{ border-color: {c['accent']}; }}
+    QLabel#sidebarSearchCount {{
         color: {c['muted']};
         font-size: 11.5px;
         padding: 0 4px;
     }}
-    QFrame#jumpBackBar {{
-        background: {c['side']};
-        border: 1px solid {c['line']};
-        border-radius: 8px;
+    QLabel#searchEmptyHint {{ color: {c['muted']}; font-size: 12px; padding: 14px 8px; }}
+    QListView#searchResults {{
+        background: transparent;
+        border: none;
+        outline: 0;
+        padding: 2px;
     }}
-    QPushButton#jumpBackButton {{
+    QListView#searchResults::item {{ padding: 0; border: none; }}
+    QPushButton#jumpBackButton, QPushButton#jumpForwardButton {{
+        color: {c['muted']};
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 0;
+        min-width: 20px;
+        max-width: 20px;
+        min-height: 18px;
+        max-height: 20px;
+        font-size: 14px;
+    }}
+    QPushButton#jumpBackButton:hover, QPushButton#jumpForwardButton:hover {{
         color: {c['accent']};
         background: {accent_soft};
-        border: 1px solid {c['line']};
-        border-radius: 6px;
-        padding: 1px 8px;
-        min-height: 18px;
-        font-size: 11.5px;
-        font-weight: 600;
+        border-color: transparent;
     }}
-    QPushButton#jumpBackButton:hover {{
-        color: {c['ink']};
-        background: {c['selected']};
-        border-color: {c['accent']};
-    }}
-    QPushButton#jumpBackButton:pressed {{
+    QPushButton#jumpBackButton:pressed, QPushButton#jumpForwardButton:pressed {{
         color: {on_accent};
         background: {c['accent']};
         border-color: {c['accent']};
     }}
-    QLabel#jumpBackLabel {{
-        color: {ink_secondary};
-        font-size: 11.5px;
-    }}
+    QLabel#jumpTargetLabel {{ color: {ink_secondary}; font-size: 11.5px; }}
     QComboBox#shelfSortCombo {{
         background: {c['side']};
         border: 1px solid {c['line']};

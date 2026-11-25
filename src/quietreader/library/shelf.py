@@ -11,7 +11,7 @@ import uuid
 
 BOOKSHELF_DIR = "bookshelf"
 UNCLASSIFIED = "uncategorized"
-SUPPORTED_SUFFIXES = {".txt", ".epub"}
+SUPPORTED_SUFFIXES = {".txt", ".epub", ".pdf"}
 _INVALID_CATEGORY_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _RESERVED_CATEGORY_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 
@@ -180,7 +180,7 @@ class ShelfManager:
         except (OSError, RuntimeError):
             raise ShelfError("书籍文件不存在或无法访问。") from None
         if not resolved.is_file():
-            raise ShelfError("请选择 TXT 或 EPUB 文件。")
+            raise ShelfError("请选择 TXT、EPUB 或 PDF 文件。")
         try:
             relative = resolved.relative_to(self.root.resolve())
         except ValueError:
@@ -188,7 +188,7 @@ class ShelfManager:
         if len(relative.parts) != 2 or relative.parts[0].casefold() not in {UNCLASSIFIED.casefold(), *(name.casefold() for name in self.categories())}:
             raise ShelfError("书架文件必须直接位于未分类或一个分类文件夹中。")
         if resolved.suffix.lower() not in SUPPORTED_SUFFIXES:
-            raise ShelfError("书架只支持 TXT 和 EPUB 文件。")
+            raise ShelfError("书架只支持 TXT、EPUB 和 PDF 文件。")
         return resolved, True
 
     def add_book(self, source):
@@ -198,7 +198,7 @@ class ShelfManager:
         except (OSError, RuntimeError):
             raise ShelfError("书籍文件不存在或无法访问。") from None
         if not resolved.is_file() or resolved.suffix.lower() not in SUPPORTED_SUFFIXES:
-            raise ShelfError("请选择 TXT 或 EPUB 文件。")
+            raise ShelfError("请选择 TXT、EPUB 或 PDF 文件。")
         if original.is_symlink():
             resolved = original.resolve(strict=True)
         if self.is_managed(resolved):
@@ -224,7 +224,7 @@ class ShelfManager:
     def move_book(self, path, target_category):
         source, managed = self._managed_source(path)
         if source.suffix.lower() not in SUPPORTED_SUFFIXES:
-            raise ShelfError("书架只支持 TXT 和 EPUB 文件。")
+            raise ShelfError("书架只支持 TXT、EPUB 和 PDF 文件。")
         destination_dir = self.category_path(target_category)
         if managed and source.parent.resolve() == destination_dir.resolve():
             return source

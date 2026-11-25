@@ -1,17 +1,21 @@
 """Bounded local imports. No extraction, script execution or network access."""
 
+import math
+import posixpath
+import re
+import unicodedata
+import zipfile
 from hashlib import sha256
 from html.entities import name2codepoint as _HTML_NAMED_ENTITIES
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-import posixpath
-import re
 from urllib.parse import unquote, urlsplit
-import unicodedata
-import zipfile
 
 from charset_normalizer import from_bytes
 from defusedxml import ElementTree as ET
+from PySide6.QtCore import QBuffer, QEventLoop, QIODevice, QSize, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtPdf import QPdfDocument
 
 from quietreader.domain.models import Book, EPUBFormatRange, EPUBLink, NavigationEntry, Section
 
@@ -24,6 +28,12 @@ MAX_EPUB_LINKS = 50000
 MAX_EPUB_NAV_ENTRIES = 20000
 MAX_EPUB_FORMAT_RANGES = 50000
 MAX_EPUB_IMAGE_REFERENCES = 4096
+MAX_PDF_PAGES = 4096
+MAX_PDF_RENDER_EDGE = 2000
+MAX_PDF_RENDER_PIXELS = 16_000_000
+MAX_PDF_OUTPUT = MAX_EXPANDED
+PDF_LOAD_TIMEOUT_MS = 120_000
+PDF_IMAGE_QUALITY = 90
 ENCODINGS = ("auto", "utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "gb18030", "gbk")
 
 _ASCII_CTRL_CODES = (*range(0, 9), *range(14, 32), 127)
@@ -35,6 +45,7 @@ _BYTE_NORM_TABLE = bytes.maketrans(b"\x0b", b"\n")
 _BYTE_DELETE_CTRLS = bytes(_ASCII_CTRL_CODES)
 _BYTE_DELETE_CRLF_CTRLS = bytes((*_ASCII_CTRL_CODES, 13))
 _BINARY_SIGNATURES = (
+    b"%PDF-",
     b"\x89PNG\r\n\x1a\n",
     b"PK\x03\x04",
     b"PK\x05\x06",
@@ -97,7 +108,7 @@ class ImportError(ValueError):
 def _is_binary_payload(data: bytes) -> bool:
     if data.startswith(_BINARY_SIGNATURES) or b"\x00" * 16 in data:
         return True
-    if data.startswith((b"GIF87a", b"GIF89a", b"%PDF-")):
+    if data.startswith((b"GIF87a", b"GIF89a")):
         return any(b < 9 or (13 < b < 32) or b == 127 for b in data[:256])
     if len(data) >= 64 and data.startswith(b"MZ") and data[:64].count(0) >= 16:
         return True
@@ -237,6 +248,8 @@ def decode_text(data: bytes, encoding="auto") -> tuple[str, str]:
         raise ImportError("不支持这个编码选项。", True)
     if not data:
         raise ImportError("这个文件是空的。")
+    if data.startswith(b"%PDF-"):
+        raise ImportError("检测到 PDF 文件内容，请将扩展名改为 .pdf 后重新导入。")
     if _is_binary_payload(data):
         raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
     if encoding != "auto":
@@ -1091,11 +1104,157 @@ def _load_epub(path: Path) -> tuple[str, str, list[Section]]:
         raise ImportError("EPUB 结构损坏、内容缺失或 XML 不受支持，无法读取。") from None
 
 
+def _wait_for_pdf_document(document: QPdfDocument) -> None:
+    if document.status() != QPdfDocument.Status.Loading:
+        return
+
+    event_loop = QEventLoop()
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+
+    def finish_loading(*_):
+        if document.status() != QPdfDocument.Status.Loading:
+            event_loop.quit()
+
+    document.statusChanged.connect(finish_loading)
+    timeout.timeout.connect(event_loop.quit)
+    timeout.start(PDF_LOAD_TIMEOUT_MS)
+    if document.status() == QPdfDocument.Status.Loading:
+        event_loop.exec()
+    timeout.stop()
+    document.statusChanged.disconnect(finish_loading)
+    if document.status() == QPdfDocument.Status.Loading:
+        raise ImportError("读取 PDF 超时，请检查文件后重试。")
+
+
+def _pdf_error(error) -> ImportError:
+    if error == QPdfDocument.Error.IncorrectPassword:
+        return ImportError("PDF 受密码保护，当前版本暂不支持。")
+    if error == QPdfDocument.Error.UnsupportedSecurityScheme:
+        return ImportError("PDF 使用了当前版本不支持的加密方式。")
+    return ImportError("这不是有效或可读取的 PDF 文件。")
+
+
+def _pdf_metadata(document: QPdfDocument, field, limit: int) -> str:
+    try:
+        value = document.metaData(field)
+    except (RuntimeError, TypeError, ValueError):
+        return ""
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:limit]
+
+
+def _render_pdf_page(document: QPdfDocument, page_index: int) -> bytes:
+    page_size = document.pagePointSize(page_index)
+    width_pt, height_pt = float(page_size.width()), float(page_size.height())
+    if not (math.isfinite(width_pt) and math.isfinite(height_pt) and width_pt > 0 and height_pt > 0):
+        raise ImportError("PDF 页面尺寸无效，无法渲染。")
+
+    page_area = width_pt * height_pt
+    if not math.isfinite(page_area) or page_area <= 0:
+        raise ImportError("PDF 页面尺寸无效，无法渲染。")
+    scale = min(
+        2.0,
+        MAX_PDF_RENDER_EDGE / max(width_pt, height_pt),
+        (MAX_PDF_RENDER_PIXELS / page_area) ** 0.5,
+    )
+    target_size = QSize(max(1, round(width_pt * scale)), max(1, round(height_pt * scale)))
+    image = document.render(page_index, target_size)
+    if image.isNull():
+        raise ImportError("PDF 页面无法渲染，请检查文件。")
+
+    canvas = QImage(image.size(), QImage.Format.Format_RGB32)
+    canvas.fill(QColor("white"))
+    painter = QPainter(canvas)
+    if not painter.isActive():
+        raise ImportError("无法准备 PDF 页面图像。")
+    painter.drawImage(0, 0, image)
+    painter.end()
+
+    buffer = QBuffer()
+    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+        raise ImportError("无法编码 PDF 页面图像。")
+    saved = canvas.save(buffer, "JPEG", PDF_IMAGE_QUALITY)
+    payload = bytes(buffer.data())
+    buffer.close()
+    if not saved or not payload:
+        raise ImportError("无法编码 PDF 页面图像。")
+    return payload
+
+
+def _load_pdf(path: Path) -> tuple[str, str, list[Section], list[NavigationEntry], dict[str, str]]:
+    document = QPdfDocument()
+    try:
+        error = document.load(str(path))
+        if error != QPdfDocument.Error.None_:
+            raise _pdf_error(error)
+        _wait_for_pdf_document(document)
+        if document.status() != QPdfDocument.Status.Ready:
+            raise _pdf_error(document.error())
+
+        page_count = document.pageCount()
+        if page_count <= 0:
+            raise ImportError("PDF 中没有可阅读的页面。")
+        if page_count > MAX_PDF_PAGES:
+            raise ImportError("PDF 页数超过当前支持上限（4096 页）。")
+
+        title = _pdf_metadata(document, QPdfDocument.MetaDataField.Title, 300) or path.stem
+        author = _pdf_metadata(document, QPdfDocument.MetaDataField.Author, 300)
+        description = _pdf_metadata(document, QPdfDocument.MetaDataField.Subject, 4000)
+        sections = []
+        page_list = []
+        output_size = 0
+
+        for page_index in range(page_count):
+            page_label = document.pageLabel(page_index).strip() or str(page_index + 1)
+            page_title = f"第 {page_label} 页"[:160]
+            source_path = f"pdf:{page_index + 1}"
+            page_list.append(NavigationEntry(page_title, source_path, source_offset=0))
+
+            try:
+                text = _valid_text(document.getAllText(page_index).text())
+            except Exception:
+                text = ""
+            text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+            if text:
+                output_size += len(text.encode("utf-8"))
+                if output_size > MAX_PDF_OUTPUT:
+                    raise ImportError("PDF 提取的文字或页面图像过大，当前版本无法安全读取。")
+                page_sections = split_section(f"pdf:{page_index + 1}", page_title, text)
+                for section in page_sections:
+                    section.source_path = source_path
+                sections.extend(page_sections)
+            else:
+                payload = _render_pdf_page(document, page_index)
+                output_size += len(payload)
+                sections.append(Section(
+                    f"pdf:{page_index + 1}:0",
+                    page_title,
+                    "\ufffc",
+                    images={0: payload},
+                    source_path=source_path,
+                ))
+
+            if output_size > MAX_PDF_OUTPUT:
+                raise ImportError("PDF 提取的文字或页面图像过大，当前版本无法安全读取。")
+
+        metadata = {"description": description}
+        return title, author, sections, page_list, metadata
+    except ImportError:
+        raise
+    except Exception:
+        raise ImportError("PDF 结构损坏或页面内容不受支持，无法读取。") from None
+    finally:
+        document.close()
+
+
 def load_book(file: str | Path, encoding="auto") -> Book:
     path = Path(file)
     try:
-        if path.suffix.lower() not in (".txt", ".epub"):
-            raise ImportError("请选择 TXT 或未加密的 EPUB 文件。")
+        if path.suffix.lower() not in (".txt", ".epub", ".pdf"):
+            raise ImportError("请选择 TXT、EPUB 或 PDF 文件。")
         if not path.is_file():
             raise ImportError("文件不存在或无法访问，请重新定位文件。")
         size = path.stat().st_size
@@ -1112,6 +1271,9 @@ def load_book(file: str | Path, encoding="auto") -> Book:
                 raise ImportError("文件超过 64 MiB，当前版本暂不支持。")
             text, detected = decode_text(data, encoding)
             return Book(book_id, str(path), path.stem, sections=_parse_validated_txt(text), encoding=detected)
+        if path.suffix.lower() == ".pdf":
+            title, author, sections, page_list, metadata = _load_pdf(path)
+            return Book(book_id, str(path), title, author, sections, "PDF", page_list=page_list, **metadata)
         title, author, sections, navigation, metadata = _load_epub(path)
         return Book(book_id, str(path), title, author, sections, "EPUB", navigation["toc"], navigation["page_list"], navigation["landmarks"], **metadata)
     except ImportError:

@@ -22,9 +22,10 @@ from quietreader.library.shelf import SUPPORTED_SUFFIXES
 
 COMPUTER_TARGET = "__computer__"
 FILE_FILTERS = (
-    ("阅读文件 (*.txt *.epub)", frozenset(SUPPORTED_SUFFIXES)),
+    ("阅读文件 (*.txt *.epub *.pdf)", frozenset(SUPPORTED_SUFFIXES)),
     ("TXT (*.txt)", frozenset({".txt"})),
     ("EPUB (*.epub)", frozenset({".epub"})),
+    ("PDF (*.pdf)", frozenset({".pdf"})),
 )
 _QUOTED_TOKENS = re.compile(r'"([^"]+)"')
 _HIDDEN_WIN_ATTRS = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0) | getattr(stat, "FILE_ATTRIBUTE_SYSTEM", 0)
@@ -728,7 +729,7 @@ class BookFileDialog(QDialog):
                             pass
                     self.navigate(resolved.parent, select_path=resolved)
                     return
-                self.hint_label.setText(self.t("请选择 TXT 或 EPUB 文件。"))
+                self.hint_label.setText(self.t("请选择 TXT、EPUB 或 PDF 文件。"))
                 return
         except (OSError, RuntimeError):
             pass
@@ -830,10 +831,10 @@ class BookFileDialog(QDialog):
                     self.hint_label.setText(self.t("找不到路径，请检查后重试。"))
                     return
                 if resolved.is_dir():
-                    self.hint_label.setText(self.t("请选择要添加的 TXT 或 EPUB 文件。"))
+                    self.hint_label.setText(self.t("请选择要添加的 TXT、EPUB 或 PDF 文件。"))
                     return
                 if resolved.suffix.lower() not in SUPPORTED_SUFFIXES:
-                    self.hint_label.setText(self.t("请选择 TXT 或 EPUB 文件。"))
+                    self.hint_label.setText(self.t("请选择 TXT、EPUB 或 PDF 文件。"))
                     return
                 resolved_files.append(str(resolved))
             self._selected_files = resolved_files
@@ -849,4 +850,4 @@ class BookFileDialog(QDialog):
             self._selected_files = files
             self.accept()
             return
-        self.hint_label.setText(self.t("请选择要添加的 TXT 或 EPUB 文件。"))
+        self.hint_label.setText(self.t("请选择要添加的 TXT、EPUB 或 PDF 文件。"))
