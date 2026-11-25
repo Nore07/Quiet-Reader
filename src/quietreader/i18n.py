@@ -3,6 +3,17 @@ from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
 
 EN = {
     "重命名分类": "Rename category",
+    "筛选目录…": "Filter contents…",
+    "筛选目录": "Filter contents",
+    "搜索全书内容…": "Search in book…",
+    "书内搜索": "Search in book",
+    "无匹配": "No matches",
+    "上一个匹配 (Shift+Enter)": "Previous match (Shift+Enter)",
+    "下一个匹配 (Enter)": "Next match (Enter)",
+    "关闭搜索 (Esc)": "Close search (Esc)",
+    "↩ 返回": "↩ Back",
+    "返回上一处阅读位置 (Alt+Left)": "Return to previous reading position (Alt+Left)",
+    "返回：{chapter} · 第 {page} 页": "Back to: {chapter} · Page {page}",
     "新分类名称": "New category name",
     "未分类文件夹不能重命名。": "The Unclassified folder cannot be renamed.",
     "无法重命名分类：{error}": "Could not rename the category: {error}",
