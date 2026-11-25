@@ -1211,33 +1211,6 @@ class MainWindow(QMainWindow):
         self.reader.reflowed.connect(self._on_reader_reflowed)
         reading.addWidget(self.reader, 1)
 
-        self.jump_back_bar = QFrame(self.reader_page)
-        self.jump_back_bar.setObjectName("jumpBackBar")
-        self.jump_back_bar.setFixedHeight(26)
-        jump_layout = QHBoxLayout(self.jump_back_bar)
-        jump_layout.setContentsMargins(6, 1, 8, 1)
-        jump_layout.setSpacing(8)
-        self.jump_back_button = QPushButton("↩ 返回", self.jump_back_bar)
-        self.jump_back_button.setObjectName("jumpBackButton")
-        self.jump_back_button.setProperty("translation_source", "↩ 返回")
-        self.jump_back_button.setToolTip("返回上一处阅读位置 (Alt+Left)")
-        self.jump_back_button.setProperty("translation_tip", "返回上一处阅读位置 (Alt+Left)")
-        self.jump_back_button.setAccessibleName("返回上一处阅读位置 (Alt+Left)")
-        self.jump_back_button.setProperty("translation_accessible", "返回上一处阅读位置 (Alt+Left)")
-        self.jump_back_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.jump_back_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.jump_back_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.jump_back_button.clicked.connect(self.jump_back)
-        jump_layout.addWidget(self.jump_back_button)
-        self.jump_back_label = QLabel("", self.jump_back_bar)
-        self.jump_back_label.setObjectName("jumpBackLabel")
-        self.jump_back_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.jump_back_label.setMinimumWidth(0)
-        self.jump_back_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        jump_layout.addWidget(self.jump_back_label, 1)
-        self.jump_back_bar.hide()
-        reading.addWidget(self.jump_back_bar)
-
         self.progress = ThinSlider(Qt.Orientation.Horizontal)
         self.progress.setRange(0, 1000)
         self.progress.setAccessibleName("本章阅读进度")
@@ -1246,7 +1219,7 @@ class MainWindow(QMainWindow):
         self._themed_controls.append(self.progress)
         reading.addWidget(self.progress)
 
-        # Whisper-quiet footer: page status left, subtle vector chevrons center, book progress right
+        # Compact footer keeps chapter status and jump-back action on one line.
         self.reader_navigation = QWidget()
         self.reader_navigation.setObjectName("readerNavigation")
         self.reader_navigation_layout = QHBoxLayout(self.reader_navigation)
@@ -1258,6 +1231,19 @@ class MainWindow(QMainWindow):
         self.page_label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.page_label.setProperty("full_text", "PageUp / PageDown")
         self.page_label.setProperty("compact_text", "Pg")
+
+        self.jump_back_button = QPushButton("↶", self.reader_navigation)
+        self.jump_back_button.setObjectName("jumpBackButton")
+        self.jump_back_button.setProperty("translation_source", "↶")
+        self.jump_back_button.setToolTip("返回上一处阅读位置 (Alt+Left)")
+        self.jump_back_button.setProperty("translation_tip", "返回上一处阅读位置 (Alt+Left)")
+        self.jump_back_button.setAccessibleName("返回上一处阅读位置 (Alt+Left)")
+        self.jump_back_button.setProperty("translation_accessible", "返回上一处阅读位置 (Alt+Left)")
+        self.jump_back_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.jump_back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.jump_back_button.setFixedSize(22, 20)
+        self.jump_back_button.clicked.connect(self.jump_back)
+        self.jump_back_button.hide()
         self.previous_chapter = self._icon_button("prev_chapter", lambda: self.turn_chapter(-1), "上一章", size=13, fixed_size=(24, 22))
         self.previous = self._icon_button("prev_page", lambda: self.turn_page(-1), "← 上一页", size=13, fixed_size=(24, 22))
         self.next = self._icon_button("next_page", lambda: self.turn_page(1), "下一页 →", size=13, fixed_size=(24, 22))
@@ -1266,6 +1252,7 @@ class MainWindow(QMainWindow):
         self.footer_book_progress.setObjectName("pageStatus")
         self.footer_book_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         navigation.addWidget(self.page_label)
+        navigation.addWidget(self.jump_back_button)
         navigation.addStretch(1)
         navigation.addWidget(self.previous_chapter)
         navigation.addWidget(self.previous)
@@ -1323,7 +1310,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.encoding_bar)
         self.chrome_widgets = [
             header, self.shelf_narrow_bar, self.hotkey_notice, self.sidebar,
-            self.jump_back_bar, self.progress,
+            self.progress,
             self.reader_navigation, bottom_widget, self.encoding_bar,
         ]
         self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
@@ -1878,7 +1865,7 @@ class MainWindow(QMainWindow):
         self.reading_tabs.setTabVisible(4, False)
         self.encoding_button.hide()
         self.encoding_bar.hide()
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         self._update_header_crumb()
         self._update_progress()
         self._refresh_bookmarks()
@@ -1970,7 +1957,7 @@ class MainWindow(QMainWindow):
         self.reading_tabs.setCurrentIndex(0)
         raw = self.store.state["positions"].get(book.id, {})
         index, offset = restore_position(book.sections, Position(raw.get("section_id", ""), raw.get("offset", 0)))
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         self.open_section(index, offset)
         self._filter_chapters()
         if self._search_active:
@@ -2080,7 +2067,7 @@ class MainWindow(QMainWindow):
             self.search_result_model.invalidate_pages()
             self.search_results.viewport().update()
         self._update_progress()
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
 
     def _filter_chapters(self, _text=""):
         if not hasattr(self, "toc_filter"):
@@ -2201,7 +2188,7 @@ class MainWindow(QMainWindow):
             self._run_book_search(navigate=False, anchor=anchor_override)
         else:
             self._set_search_results_state("")
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         if focus_input:
             self.search_input.setFocus()
             self.search_input.selectAll()
@@ -2241,7 +2228,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "reader"):
             self.reader.set_search_highlights([], None)
         self._sync_page_navigation()
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         if focus_reader and was_active and hasattr(self, "reader") and self.main_pages.currentWidget() is self.reader_page:
             self.reader.setFocus()
 
@@ -2411,18 +2398,10 @@ class MainWindow(QMainWindow):
             if not self._search_origin_pushed:
                 self._push_jump_origin(origin)
                 self._search_origin_pushed = True
-                if not self.focus_mode and self.jump_back_bar.isHidden():
-                    self.jump_back_bar.show()
-                    self.reading_layout.invalidate()
-                    self.reading_layout.activate()
         elif self._search_origin_pushed and self._jump_history and self._same_section_page(self._jump_history[-1], dest):
             self._jump_history.pop()
             self._persist_jump_history()
             self._search_origin_pushed = False
-            if not self._jump_history and not self.jump_back_bar.isHidden():
-                self.jump_back_bar.hide()
-                self.reading_layout.invalidate()
-                self.reading_layout.activate()
         self._in_search_navigation = True
         try:
             if sec_idx != self.section_index:
@@ -2442,7 +2421,7 @@ class MainWindow(QMainWindow):
         if remember_origin:
             self._search_origin = (self.section_index, self.reader.offset)
             self._search_origin_pushed = False
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
 
     def _sync_reader_search_highlights(self):
         if not hasattr(self, "reader"):
@@ -2461,16 +2440,6 @@ class MainWindow(QMainWindow):
             if act_sec == self.section_index:
                 active_range = (act_start, act_end)
         self.reader.set_search_highlights(sec_matches, active_range)
-
-    def _post_back_reader_height(self) -> int:
-        height = self.reader.height()
-        if (
-            len(self._jump_history) == 1
-            and hasattr(self, "jump_back_bar")
-            and not self.jump_back_bar.isHidden()
-        ):
-            height += self.jump_back_bar.height() + self.reading_layout.spacing()
-        return height
 
     def _same_section_page(
         self,
@@ -2540,14 +2509,10 @@ class MainWindow(QMainWindow):
         dest = (target_section, clamped_target)
         if not self._same_section_page(origin, dest):
             self._push_jump_origin(origin)
-            if not self.focus_mode and self.jump_back_bar.isHidden():
-                self.jump_back_bar.show()
-                self.reading_layout.invalidate()
-                self.reading_layout.activate()
         self.open_section(target_section, clamped_target)
         self._search_origin = (self.section_index, self.reader.offset)
         self._search_origin_pushed = False
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         return True
 
     def jump_back(self):
@@ -2561,62 +2526,34 @@ class MainWindow(QMainWindow):
         target_section, target_offset = self._jump_history.pop()
         self._persist_jump_history()
         if not 0 <= target_section < len(self.book.sections):
-            self._update_jump_back_bar()
+            self._update_jump_back_button()
             return False
-        if not self._jump_history and not self.jump_back_bar.isHidden():
-            self.jump_back_bar.hide()
-            self.reading_layout.invalidate()
-            self.reading_layout.activate()
         self.open_section(target_section, target_offset)
         self._search_origin = (self.section_index, self.reader.offset)
         self._search_origin_pushed = False
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         self.reader.setFocus()
         return True
 
-    def _update_jump_back_bar(self):
-        if not hasattr(self, "jump_back_bar"):
+    def _update_jump_back_button(self):
+        if not hasattr(self, "jump_back_button"):
             return
         should_show = bool(self.book and self._jump_history and not self.focus_mode)
-        if should_show != (not self.jump_back_bar.isHidden()):
-            self.jump_back_bar.setVisible(should_show)
-            self.reading_layout.invalidate()
-            self.reading_layout.activate()
+        if should_show != (not self.jump_back_button.isHidden()):
+            self.jump_back_button.setVisible(should_show)
+            self._sync_reader_navigation_labels()
         if not self.book or not self._jump_history:
-            self.jump_back_label.setText("")
-            self.jump_back_label.setToolTip("")
+            self.jump_back_button.setToolTip(self.t("返回上一处阅读位置 (Alt+Left)"))
             return
-        target_section, target_offset = self._jump_history[-1]
+        target_section, _target_offset = self._jump_history[-1]
         if not 0 <= target_section < len(self.book.sections):
-            self.jump_back_label.setText("")
-            self.jump_back_label.setToolTip("")
+            self.jump_back_button.setToolTip(self.t("返回上一处阅读位置 (Alt+Left)"))
             return
         section = self.book.sections[target_section]
-        post_back_height = self._post_back_reader_height()
-        page_num = self.reader.page_for_section_offset(
-            section, target_offset, target_height=post_back_height,
-        )
         chapter_name = section.title.strip() or self.book.title
-        page_text = self.t("第 {page} 页", page=page_num)
-        suffix = f" · {page_text}"
-        full_tooltip = self.t("返回：{chapter} · 第 {page} 页", chapter=chapter_name, page=page_num)
-
-        bar_width = self.reader.width() if self.reader.width() > 60 else self.jump_back_bar.width()
-        if bar_width <= 60:
-            bar_width = self.reader_page.width() if self.reader_page.width() > 60 else max(200, self.width() - 24)
-        self.jump_back_button.ensurePolished()
-        btn_width = self.jump_back_button.sizeHint().width()
-        avail = max(40, bar_width - 14 - 8 - btn_width - 4)
-        metrics = QFontMetrics(self.jump_back_label.font())
-        suffix_width = metrics.horizontalAdvance(suffix) + 4
-        chapter_budget = avail - suffix_width
-        if chapter_budget >= 28:
-            elided_chapter = metrics.elidedText(chapter_name, Qt.TextElideMode.ElideRight, chapter_budget)
-            display_text = f"{elided_chapter}{suffix}"
-        else:
-            display_text = metrics.elidedText(page_text, Qt.TextElideMode.ElideRight, avail)
-        self.jump_back_label.setText(display_text)
-        self.jump_back_label.setToolTip(full_tooltip)
+        full_tooltip = self.t("返回：{chapter}", chapter=chapter_name)
+        shortcut_hint = self.t("返回上一处阅读位置 (Alt+Left)")
+        self.jump_back_button.setToolTip(f"{full_tooltip} · {shortcut_hint}")
 
     def _select_toc_target(self, section_index, offset):
         best_row = -1
@@ -3228,12 +3165,10 @@ class MainWindow(QMainWindow):
                 widget.setVisible(visible)
             if hasattr(self, "search_bar"):
                 self.search_bar.setVisible(bool(self._search_active and self.book))
-            if hasattr(self, "jump_back_bar"):
-                self.jump_back_bar.setVisible(bool(self._jump_history and self.book))
         self.apply_settings(self.settings)
         if not entering:
             self._sync_reader_search_highlights()
-            self._update_jump_back_bar()
+            self._update_jump_back_button()
         self._focus_resample_timer.stop()
         self._focus_geometry_dirty = False
         if not entering and self._pre_focus_maximized:
@@ -3271,11 +3206,7 @@ class MainWindow(QMainWindow):
 
     def _toast_bottom_margin(self):
         if hasattr(self, "main_pages") and self.main_pages.currentWidget() is self.reader_page:
-            anchor_widget = (
-                self.jump_back_bar
-                if hasattr(self, "jump_back_bar") and not self.jump_back_bar.isHidden()
-                else getattr(self, "progress", None)
-            )
+            anchor_widget = getattr(self, "progress", None)
             if anchor_widget is not None and not anchor_widget.isHidden():
                 anchor_y = anchor_widget.mapTo(self.surface, QPoint(0, 0)).y()
                 if anchor_y > 0:
@@ -3366,7 +3297,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"{display_title} · QuietReader")
         self._update_header_crumb()
         self._update_progress()
-        self._update_jump_back_bar()
+        self._update_jump_back_button()
         self.encoding.setItemText(0, self.t("自动识别"))
         focus_label = self.t("退出专注" if self.focus_mode else "专注")
         self.focus_button.setToolTip(focus_label)
@@ -3590,7 +3521,8 @@ class MainWindow(QMainWindow):
         self.page_label.setText(full_page_label)
         self.page_label.setToolTip(full_page_label)
         footer_w = self.footer_book_progress.sizeHint().width() if hasattr(self, "footer_book_progress") else 0
-        full_width = self.page_label.sizeHint().width() + footer_w + 132
+        back_button_w = 0 if self.jump_back_button.isHidden() else self.jump_back_button.width() + 4
+        full_width = self.page_label.sizeHint().width() + footer_w + 132 + back_button_w
         compact = self.reader_navigation.width() < full_width
         if compact:
             self.page_label.setText(compact_page_label)
@@ -3774,7 +3706,7 @@ class MainWindow(QMainWindow):
             self._update_window_controls()
             self._sync_reader_navigation_labels()
             self._sync_search_bar_responsive()
-            self._update_jump_back_bar()
+            self._update_jump_back_button()
         if hasattr(self, "toast") and not self.toast.isHidden():
             self.toast.reposition(self._toast_bottom_margin())
         if hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden():
@@ -3796,7 +3728,7 @@ class MainWindow(QMainWindow):
             self._update_window_controls()
             self._sync_reader_navigation_labels()
             self._sync_search_bar_responsive()
-            self._update_jump_back_bar()
+            self._update_jump_back_button()
         if hasattr(self, "toast") and not self.toast.isHidden():
             self.toast.reposition(self._toast_bottom_margin())
         if was_hidden and self.focus_mode:
