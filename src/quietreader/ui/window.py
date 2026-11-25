@@ -51,6 +51,7 @@ from quietreader.ui.file_dialog import BookFileDialog, default_book_directory
 from quietreader.ui.toast import ToastNotice
 from quietreader.persistence.store import (
     MAX_BOOKMARKS, MAX_BOOKMARK_NOTE, MAX_BOOK_RECORDS, MAX_BOOK_TITLE_OVERRIDE,
+    MAX_JUMP_HISTORY, MAX_JUMP_HISTORY_BOOKS,
 )
 from quietreader.library.shelf import SUPPORTED_SUFFIXES, ShelfError, ShelfManager, UNCLASSIFIED, book_id_for_path
 from quietreader.ui.shelf import ShelfPanel, display_title_for_record
@@ -678,7 +679,7 @@ class MainWindow(QMainWindow):
         self._drag_has_valid = False
         self._chrome_visibility = {}
         self._jump_history: list[tuple[int, int]] = []
-        self._max_jump_history = 30
+        self._max_jump_history = MAX_JUMP_HISTORY
         self._search_active = False
         self._search_return_tab = 0
         self._last_sidebar_tab_index = 0
@@ -1602,6 +1603,10 @@ class MainWindow(QMainWindow):
             if old_id in mapping:
                 previous = mapping.pop(old_id)
                 mapping.setdefault(new_id, previous)
+        jump_history = self.store.state.setdefault("jump_history", {})
+        if old_id in jump_history:
+            previous = jump_history.pop(old_id)
+            jump_history.setdefault(new_id, previous)
         if self.store.state.get("last_book") == old_id:
             self.store.state["last_book"] = new_id
         if self.book and self.book.id == old_id:
@@ -1702,6 +1707,7 @@ class MainWindow(QMainWindow):
         self.store.state["books"] = [item for item in self.store.state["books"] if item["id"] != book_id]
         self.store.state.get("positions", {}).pop(book_id, None)
         self.store.state.get("bookmarks", {}).pop(book_id, None)
+        self.store.state.get("jump_history", {}).pop(book_id, None)
         if self.store.state.get("last_book") == book_id:
             self.store.state["last_book"] = ""
         if self.book and self.book.id == book_id:
@@ -1764,6 +1770,7 @@ class MainWindow(QMainWindow):
                 self.store.state["books"].remove(record)
                 self.store.state.get("positions", {}).pop(book_id, None)
                 self.store.state.get("bookmarks", {}).pop(book_id, None)
+                self.store.state.get("jump_history", {}).pop(book_id, None)
                 if self.store.state.get("last_book") == book_id:
                     self.store.state["last_book"] = ""
                 if self.book and self.book.id == book_id:
@@ -1859,6 +1866,7 @@ class MainWindow(QMainWindow):
                 self.toc_filter.blockSignals(False)
             self.close_book_search(focus_reader=False, clear_query=True)
         self.book = book
+        self._restore_jump_history(book)
         record = next((item for item in self.store.state["books"] if item["id"] == book.id), None)
         title_override = record.get("title_override") if record else None
         display_title = title_override if isinstance(title_override, str) and title_override.strip() else book.title
@@ -2255,6 +2263,7 @@ class MainWindow(QMainWindow):
                     self.reading_layout.activate()
         elif self._search_origin_pushed and self._jump_history and self._same_section_page(self._jump_history[-1], dest):
             self._jump_history.pop()
+            self._persist_jump_history()
             self._search_origin_pushed = False
             if not self._jump_history and not self.jump_back_bar.isHidden():
                 self.jump_back_bar.hide()
@@ -2335,6 +2344,36 @@ class MainWindow(QMainWindow):
             self._jump_history.append(normalized)
             if len(self._jump_history) > self._max_jump_history:
                 self._jump_history = self._jump_history[-self._max_jump_history:]
+        self._persist_jump_history()
+
+    def _restore_jump_history(self, book):
+        section_indices = {section.id: index for index, section in enumerate(book.sections)}
+        restored = []
+        records = self.store.state.get("jump_history", {}).get(book.id, [])
+        for record in records[-self._max_jump_history:]:
+            index = section_indices.get(record.get("section_id"))
+            if index is None:
+                continue
+            offset = max(0, min(len(book.sections[index].text), record.get("offset", 0)))
+            restored.append((index, offset))
+        self._jump_history = restored
+
+    def _persist_jump_history(self, *, schedule=True):
+        if not self.book:
+            return
+        histories = self.store.state.setdefault("jump_history", {})
+        histories.pop(self.book.id, None)
+        records = [
+            {"section_id": self.book.sections[index].id, "offset": offset}
+            for index, offset in self._jump_history[-self._max_jump_history:]
+            if 0 <= index < len(self.book.sections)
+        ]
+        if records:
+            histories[self.book.id] = records
+        while len(histories) > MAX_JUMP_HISTORY_BOOKS:
+            histories.pop(next(iter(histories)))
+        if schedule:
+            self.schedule_save()
 
     def _navigate_with_jump_history(self, target_section: int, target_offset: int) -> bool:
         if not self.book or not 0 <= target_section < len(self.book.sections):
@@ -2363,6 +2402,7 @@ class MainWindow(QMainWindow):
         ):
             return False
         target_section, target_offset = self._jump_history.pop()
+        self._persist_jump_history()
         if not 0 <= target_section < len(self.book.sections):
             self._update_jump_back_bar()
             return False
@@ -3560,6 +3600,7 @@ class MainWindow(QMainWindow):
         if self.book:
             section = self.book.sections[self.section_index]
             self.store.state["positions"][self.book.id] = asdict(Position(section.id, self.reader.offset))
+            self._persist_jump_history(schedule=False)
         try:
             self.store.save()
         except OSError:
