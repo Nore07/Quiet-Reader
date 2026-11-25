@@ -2091,7 +2091,7 @@ class MainWindow(QMainWindow):
 
     def _search_result_activated(self, model_index: QModelIndex):
         if model_index.isValid():
-            self._go_to_search_match(model_index.row())
+            self._go_to_search_match(model_index.row(), remember_origin=True)
             self.reader.setFocus()
 
     def open_book_search(self, focus_input=True):
@@ -2236,24 +2236,31 @@ class MainWindow(QMainWindow):
         if not self._search_matches:
             return
         next_idx = (self._search_index + 1) % len(self._search_matches)
-        self._go_to_search_match(next_idx)
+        self._go_to_search_match(next_idx, remember_origin=True)
 
     def find_previous_match(self):
         if not self._search_matches:
             return
         prev_idx = (self._search_index - 1) % len(self._search_matches)
-        self._go_to_search_match(prev_idx)
+        self._go_to_search_match(prev_idx, remember_origin=True)
 
-    def _go_to_search_match(self, match_index: int):
+    def _go_to_search_match(self, match_index: int, *, remember_origin: bool = False):
         if not self.book or not 0 <= match_index < len(self._search_matches):
             return
         self._search_index = match_index
         sec_idx, start_off, _end_off = self._search_matches[match_index]
         self.search_count_label.setText(f"{match_index + 1} / {len(self._search_matches)}")
         self._sync_search_result_selection(match_index)
-        origin = self._search_origin if self._search_origin is not None else (self.section_index, self.reader.offset)
+        origin = (
+            (self.section_index, self.reader.offset)
+            if remember_origin or self._search_origin is None
+            else self._search_origin
+        )
         dest = (sec_idx, start_off)
-        if not self._same_section_page(origin, dest):
+        if remember_origin:
+            if not self._same_section_page(origin, dest):
+                self._push_jump_origin(origin)
+        elif not self._same_section_page(origin, dest):
             if not self._search_origin_pushed:
                 self._push_jump_origin(origin)
                 self._search_origin_pushed = True
@@ -2285,6 +2292,9 @@ class MainWindow(QMainWindow):
                 self._sync_reader_search_highlights()
         finally:
             self._in_search_navigation = False
+        if remember_origin:
+            self._search_origin = (self.section_index, self.reader.offset)
+            self._search_origin_pushed = False
         self._update_jump_back_bar()
 
     def _sync_reader_search_highlights(self):
