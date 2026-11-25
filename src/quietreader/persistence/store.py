@@ -110,6 +110,7 @@ def initial_state():
         "positions": {},
         "bookmarks": {},
         "jump_history": {},
+        "forward_history": {},
         "last_book": "",
         "last_browse_dir": "",
         "last_update_check": 0,
@@ -151,6 +152,7 @@ class StateStore:
                 clean["positions"] = {k: p for k, p in positions.items() if isinstance(k, str) and isinstance(p, dict) and isinstance(p.get("section_id"), str) and type(p.get("offset")) is int}
                 clean["bookmarks"] = _clean_bookmarks(value.get("bookmarks", {}))
                 clean["jump_history"] = _clean_jump_history(value.get("jump_history", {}))
+                clean["forward_history"] = _clean_jump_history(value.get("forward_history", {}))
                 clean["last_book"] = value.get("last_book", "") if isinstance(value.get("last_book", ""), str) else ""
                 browse_dir = value.get("last_browse_dir", "")
                 if isinstance(browse_dir, str) and "\x00" not in browse_dir and len(browse_dir) <= 4096:

@@ -417,7 +417,7 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         padding: 2px;
     }}
     QListView#searchResults::item {{ padding: 0; border: none; }}
-    QPushButton#jumpBackButton {{
+    QPushButton#jumpBackButton, QPushButton#jumpForwardButton {{
         color: {c['muted']};
         background: transparent;
         border: 1px solid transparent;
@@ -429,16 +429,17 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         max-height: 20px;
         font-size: 14px;
     }}
-    QPushButton#jumpBackButton:hover {{
+    QPushButton#jumpBackButton:hover, QPushButton#jumpForwardButton:hover {{
         color: {c['accent']};
         background: {accent_soft};
         border-color: transparent;
     }}
-    QPushButton#jumpBackButton:pressed {{
+    QPushButton#jumpBackButton:pressed, QPushButton#jumpForwardButton:pressed {{
         color: {on_accent};
         background: {c['accent']};
         border-color: {c['accent']};
     }}
+    QLabel#jumpTargetLabel {{ color: {ink_secondary}; font-size: 11.5px; }}
     QComboBox#shelfSortCombo {{
         background: {c['side']};
         border: 1px solid {c['line']};
