@@ -281,14 +281,30 @@ class _SearchResultModel(QAbstractListModel):
                         page_offset = self._section_page_offsets[section_index]
                         self._pages[row] = page_offset + self.owner.reader.page_for_section_offset(section, start)
                         self._pending_pages.discard(row)
-                        self.dataChanged.emit(model_index, model_index)
+                        self.dataChanged.emit(
+                            model_index,
+                            model_index,
+                            [
+                                int(Qt.ItemDataRole.DisplayRole),
+                                int(Qt.ItemDataRole.ToolTipRole),
+                                _SEARCH_PAGE_ROLE,
+                            ],
+                        )
                     else:
                         # Build long chapter prefixes one section per event-loop turn.
                         self._page_queue.append(row)
                 except (IndexError, KeyError, RuntimeError, ValueError):
                     self._pages[row] = None
                     self._pending_pages.discard(row)
-                    self.dataChanged.emit(model_index, model_index)
+                    self.dataChanged.emit(
+                        model_index,
+                        model_index,
+                        [
+                            int(Qt.ItemDataRole.DisplayRole),
+                            int(Qt.ItemDataRole.ToolTipRole),
+                            _SEARCH_PAGE_ROLE,
+                        ],
+                    )
 
         if self._page_queue:
             self._page_task_scheduled = True
@@ -1021,8 +1037,8 @@ class MainWindow(QMainWindow):
         self.search_results.setAccessibleName("全书搜索结果")
         self.search_results.setProperty("translation_accessible", "搜索结果")
         self.search_results.setUniformItemSizes(False)
-        self.search_results.setLayoutMode(QListView.LayoutMode.Batched)
-        self.search_results.setBatchSize(24)
+        self.search_results.setLayoutMode(QListView.LayoutMode.SinglePass)
+        self.search_results.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.search_results.setSpacing(4)
         self.search_results.setMouseTracking(True)
         self.search_result_model = _SearchResultModel(self, self.search_results)
@@ -1112,15 +1128,10 @@ class MainWindow(QMainWindow):
             "chevron_down", self.find_next_match, "下一个匹配 (Enter)",
             size=13, fixed_size=(22, 22),
         )
-        self.search_close_button = self._icon_button(
-            "close", self.close_book_search, "关闭搜索 (Esc)",
-            size=12, fixed_size=(22, 22),
-        )
         self.search_prev_button.setEnabled(False)
         self.search_next_button.setEnabled(False)
         search_controls_layout.addWidget(self.search_prev_button)
         search_controls_layout.addWidget(self.search_next_button)
-        search_controls_layout.addWidget(self.search_close_button)
         search_layout.addLayout(search_controls_layout)
         self.search_bar.hide()
         search_panel_layout.insertWidget(0, self.search_bar)
