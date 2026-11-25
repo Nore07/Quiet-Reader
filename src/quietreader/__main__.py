@@ -36,8 +36,8 @@ def _wake_running_instance(server_name: str) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="QuietReader 本地 TXT / EPUB 阅读器")
-    parser.add_argument("file", nargs="?", help="打开的 TXT / EPUB 文件")
+    parser = argparse.ArgumentParser(description="QuietReader 本地 TXT / EPUB / PDF 阅读器")
+    parser.add_argument("file", nargs="?", help="打开的 TXT / EPUB / PDF 文件")
     parser.add_argument("--data-dir", type=Path, help="指定独立的本地用户数据目录")
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])

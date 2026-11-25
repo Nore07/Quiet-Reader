@@ -1,21 +1,26 @@
 """Bounded local imports. No extraction, script execution or network access."""
 
+import math
+import posixpath
+import re
+import unicodedata
+import zipfile
 from hashlib import sha256
 from html.entities import name2codepoint as _HTML_NAMED_ENTITIES
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-import posixpath
-import re
 from urllib.parse import unquote, urlsplit
-import zipfile
 
 from charset_normalizer import from_bytes
 from defusedxml import ElementTree as ET
+from PySide6.QtCore import QBuffer, QEventLoop, QIODevice, QSize, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtPdf import QPdfDocument
 
 from quietreader.domain.models import Book, EPUBFormatRange, EPUBLink, NavigationEntry, Section
 
-MAX_FILE = 32 * 1024 * 1024
-MAX_EXPANDED = 64 * 1024 * 1024
+MAX_FILE = 64 * 1024 * 1024
+MAX_EXPANDED = 128 * 1024 * 1024
 MAX_EPUB_TITLE_LENGTH = 300
 CHUNK_SIZE = 24000
 MAX_EPUB_ANCHORS = 100000
@@ -23,7 +28,75 @@ MAX_EPUB_LINKS = 50000
 MAX_EPUB_NAV_ENTRIES = 20000
 MAX_EPUB_FORMAT_RANGES = 50000
 MAX_EPUB_IMAGE_REFERENCES = 4096
+MAX_PDF_PAGES = 4096
+MAX_PDF_RENDER_EDGE = 2000
+MAX_PDF_RENDER_PIXELS = 16_000_000
+MAX_PDF_OUTPUT = MAX_EXPANDED
+PDF_LOAD_TIMEOUT_MS = 120_000
+PDF_IMAGE_QUALITY = 90
 ENCODINGS = ("auto", "utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "gb18030", "gbk")
+
+_ASCII_CTRL_CODES = (*range(0, 9), *range(14, 32), 127)
+_ALL_CTRL_CODES = (*_ASCII_CTRL_CODES, *range(128, 160))
+_ASCII_CTRL_CHARS = tuple(chr(i) for i in _ASCII_CTRL_CODES)
+_C1_CTRL_CHARS = tuple(chr(i) for i in range(128, 160))
+_STR_STRIP_TABLE = str.maketrans({"\x0b": "\n", **{i: None for i in _ALL_CTRL_CODES}})
+_BYTE_NORM_TABLE = bytes.maketrans(b"\x0b", b"\n")
+_BYTE_DELETE_CTRLS = bytes(_ASCII_CTRL_CODES)
+_BYTE_DELETE_CRLF_CTRLS = bytes((*_ASCII_CTRL_CODES, 13))
+_BINARY_SIGNATURES = (
+    b"%PDF-",
+    b"\x89PNG\r\n\x1a\n",
+    b"PK\x03\x04",
+    b"PK\x05\x06",
+    b"PK\x07\x08",
+    b"\x7fELF",
+    b"\x1f\x8b\x08",
+    b"Rar!\x1a\x07",
+    b"7z\xbc\xaf\x27\x1c",
+    b"\xff\xd8\xff",
+    b"SQLite format 3\x00",
+    b"\x00asm",
+    b"\xca\xfe\xba\xbe",
+    b"\xff\xfe\x00\x00",
+    b"\x00\x00\xfe\xff",
+)
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_PUA_RE = re.compile(r"[\ue000-\uf8ff]")
+_UTF16_AUTO_RE = re.compile(r"[\t\n -~\u2000-\u206f\u3000-\u303f\u3400-\u9fff\uff00-\uffef]")
+_MULTI_NL_RE = re.compile(r"\n{2,}")
+_TRAIL_WS_RE = re.compile(r"[ \t\f\u3000]+(?=\n)")
+
+_CN_NUM = r"零〇一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟廿卅\d"
+_EN_NUM_WORD = (
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"hundred|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)"
+    r"(?:[\s\-]+(?:one|two|three|four|five|six|seven|eight|nine))?"
+)
+_EN_PROSE_GLUE = r"(?:of|in|on|at|to|for|from|with|by|as|is|was|were|had|has|have|that|which|who|when|where|and|or|but|bought|said|came|went|made|took)\b"
+_STAGE1_HEADING_RE = re.compile(
+    r"\n[ \t\u3000]{0,32}+(?:[第卷正序前引楔尾后完上大终番【\[0-9０-９]|[CcPpBbVvEe][A-Za-z])[^\n。；;]{0,75}+(?=\n)"
+)
+_HEADING_RE = re.compile(
+    rf"^(?:"
+    rf"(?:[【\[])?(?:正文(?:卷|篇|部)?\s*|VIP卷\s*|(?:第\s*[{_CN_NUM}]+\s*[卷部篇集]|卷\s*[{_CN_NUM}]+)(?:[\s:：、.\-—·]+\S.{{0,22}}|[^\s第\n]{{0,22}})?\s+)?"
+    rf"第\s*[{_CN_NUM}]+\s*[章回节卷部篇集幕话](?:[】\]])?(?:$|(?:[\s:：、.\-—·【\[（(「『《]+\S.{{0,60}}|[^\s，。！？；,:;.!?、\]】][^，。！？；,:;.!?、]{{0,20}}))"
+    rf"|(?:[【\[])?(?:序章|序言|序幕|前言|引子|楔子|尾声|后记|完本感言|上架感言|大结局|终章|终幕)(?:[】\]])?(?:$|[\s:：、.\-—·]+\S.{{0,50}})"
+    rf"|(?:[【\[])?番外(?:篇)?(?:\s*[{_CN_NUM}]+|[（(][{_CN_NUM}]+[)）])?(?:[】\]])?(?:$|[\s:：、.\-—·]+\S.{{0,50}})"
+    rf"|卷\s*[{_CN_NUM}]+(?:$|[\s:：、.\-—·]+\S.{{0,50}})"
+    rf"|(?:chapter|part|book|volume)\s+(?:\d+\.?|(?:[ivxlcdm]+|{_EN_NUM_WORD})\.?)(?:$|[\s:：.\-—–]+\S.{{0,60}})"
+    rf"|(?:prologue|epilogue)(?:\s+(?:\d+|[ivxlcdm]+)\.?)?(?:$|[\s:：.\-—–]+\S.{{0,60}})"
+    rf")$",
+    re.I,
+)
+_EN_BARE_SPACE_RE = re.compile(
+    rf"^(?:chapter|part|book|volume)\s+(?:[ivxlcdm]+|{_EN_NUM_WORD})\s+(.+)$",
+    re.I,
+)
+_NUMBERED_HEADING_RE = re.compile(
+    r"^\d{1,4}(?:\.\s+|(?<!\d)\.(?=[^\d\s.])|．\s+|(?<!\d)．(?=[^\d\s.．])|、\s*)[^\s\"'“‘「『].{0,44}$"
+)
 
 
 class ImportError(ValueError):
@@ -32,13 +105,142 @@ class ImportError(ValueError):
         self.encoding_choice = encoding_choice
 
 
-def _valid_text(text):
-    if not text.strip():
-        raise ImportError("这本书没有可阅读的文字。")
-    controls = sum(ord(c) < 32 and c not in "\n\r\t\f" for c in text)
-    if controls:
+def _is_binary_payload(data: bytes) -> bool:
+    if data.startswith(_BINARY_SIGNATURES) or b"\x00" * 16 in data:
+        return True
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return any(b < 9 or (13 < b < 32) or b == 127 for b in data[:256])
+    if len(data) >= 64 and data.startswith(b"MZ") and data[:64].count(0) >= 16:
+        return True
+    return False
+
+
+def _check_text_quality(cleaned: str, controls: int, total_len: int) -> str:
+    head_strip = cleaned[:4096].strip()
+    if head_strip:
+        stripped_len = len(cleaned) if len(cleaned) > 4096 else len(head_strip)
+        probe = cleaned[:200000]
+    else:
+        stripped = cleaned.strip()
+        if not stripped:
+            if controls > 0:
+                raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
+            raise ImportError("这本书没有可阅读的文字。")
+        stripped_len = len(stripped)
+        probe = stripped[:200000]
+    limit = max(min(8, stripped_len), min(64, stripped_len // 4), total_len // 200)
+    if controls > limit:
         raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
-    return text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    if "\ufffd" in probe and probe.count("\ufffd") > max(16, len(probe) // 50):
+        raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
+    if len(probe) >= 16 and _PUA_RE.search(probe):
+        if len(_PUA_RE.findall(probe)) > max(8, len(probe) // 10):
+            raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
+    return cleaned
+
+
+def _valid_text(text: str) -> str:
+    if "\x00" * 16 in text:
+        raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
+    norm = text.lstrip("\ufeff")
+    if "\r" in norm:
+        norm = norm.replace("\r\n", "\n").replace("\r", "\n")
+    total_len = len(norm)
+    if total_len <= 262144:
+        cleaned = norm.translate(_STR_STRIP_TABLE)
+        controls = total_len - len(cleaned)
+    else:
+        if "\x0b" in norm:
+            norm = norm.replace("\x0b", "\n")
+            total_len = len(norm)
+        cleaned = norm
+        for ch in _ASCII_CTRL_CHARS:
+            if ch in cleaned:
+                cleaned = cleaned.replace(ch, "")
+        for ch in _C1_CTRL_CHARS:
+            if ch in cleaned:
+                cleaned = cleaned.replace(ch, "")
+        controls = total_len - len(cleaned)
+    return _check_text_quality(cleaned, controls, total_len)
+
+
+def _decode_byte_oriented(data: bytes, codec: str) -> str:
+    cr_count = data.count(b"\r")
+    if cr_count == 0:
+        clean_b = data.translate(_BYTE_NORM_TABLE, delete=_BYTE_DELETE_CTRLS)
+        controls = len(data) - len(clean_b)
+    elif cr_count == data.count(b"\r\n"):
+        clean_b = data.translate(_BYTE_NORM_TABLE, delete=_BYTE_DELETE_CRLF_CTRLS)
+        controls = (len(data) - cr_count) - len(clean_b)
+    else:
+        no_cr = data.replace(b"\r\n", "\n".encode("ascii")).replace(b"\r", b"\n")
+        clean_b = no_cr.translate(_BYTE_NORM_TABLE, delete=_BYTE_DELETE_CTRLS)
+        controls = len(no_cr) - len(clean_b)
+    text = clean_b.decode(codec, errors="strict").lstrip("\ufeff")
+    if (codec.startswith("utf-8") and b"\xc2" in clean_b) or (codec in ("gb18030", "gbk") and b"\x810" in clean_b):
+        before_c1 = len(text)
+        for ch in _C1_CTRL_CHARS:
+            if ch in text:
+                text = text.replace(ch, "")
+        controls += before_c1 - len(text)
+    return _check_text_quality(text, controls, len(text) + controls)
+
+
+def _decode_utf16(data: bytes, codec: str, require_cohesive: bool = False) -> str:
+    if require_cohesive:
+        # Quick precheck on up to 16 KiB so large non-UTF16 files fail fast.
+        head = data[:16384].decode(codec, errors="strict")
+        head_clean = head.translate(_STR_STRIP_TABLE).lstrip("\ufeff")
+        if not head_clean.strip():
+            raise UnicodeError("empty utf-16 head")
+        if len(_UTF16_AUTO_RE.findall(head_clean)) / len(head_clean) < 0.85:
+            raise UnicodeError("non-cohesive utf-16 head")
+    text = data.decode(codec, errors="strict")
+    cleaned = _valid_text(text)
+    probe = cleaned[:4096]
+    if len(probe) >= 8:
+        bad_cat = sum(unicodedata.category(c) in ("Cn", "Co") for c in probe)
+        if bad_cat > max(4, len(probe) // 10):
+            raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
+    if require_cohesive:
+        sample = cleaned[:200000]
+        readable = len(_UTF16_AUTO_RE.findall(sample))
+        if readable / max(1, len(sample)) < 0.85:
+            raise UnicodeError("ambiguous utf-16")
+    return cleaned
+
+
+def _quick_utf8_prefix_ok(data: bytes) -> bool:
+    if len(data) <= 8192:
+        return True
+    head = data[:4096].translate(_BYTE_NORM_TABLE, delete=_BYTE_DELETE_CRLF_CTRLS)
+    # Trim up to 3 trailing bytes in case 4096 split a valid multi-byte UTF-8 sequence.
+    idx = len(head)
+    while idx > 0 and len(head) - idx < 4 and head[idx - 1] >= 0x80:
+        b_val = head[idx - 1]
+        idx -= 1
+        if b_val >= 0xC0:
+            break
+    try:
+        head[:idx].decode("utf-8", errors="strict")
+        return True
+    except UnicodeError:
+        return False
+
+
+def _looks_like_bomless_utf16(probe_b: bytes, codec: str) -> bool:
+    half = len(probe_b) // 2
+    if half < 2:
+        return False
+    even_nulls = probe_b[0::2].count(0)
+    odd_nulls = probe_b[1::2].count(0)
+    if codec == "utf-16-le":
+        if odd_nulls >= max(2, half // 4) and even_nulls <= max(2, half // 50):
+            return True
+        return any(tok in probe_b for tok in (b"\n\x00", b"\r\x00", b" \x00", b"\x00\x30", b"\x0c\xff", b"\x02\x30"))
+    if even_nulls >= max(2, half // 4) and odd_nulls <= max(2, half // 50):
+        return True
+    return any(tok in probe_b for tok in (b"\x00\n", b"\x00\r", b"\x00 ", b"\x30\x00", b"\xff\x0c", b"\x30\x02"))
 
 
 def decode_text(data: bytes, encoding="auto") -> tuple[str, str]:
@@ -46,26 +248,68 @@ def decode_text(data: bytes, encoding="auto") -> tuple[str, str]:
         raise ImportError("不支持这个编码选项。", True)
     if not data:
         raise ImportError("这个文件是空的。")
+    if data.startswith(b"%PDF-"):
+        raise ImportError("检测到 PDF 文件内容，请将扩展名改为 .pdf 后重新导入。")
+    if _is_binary_payload(data):
+        raise ImportError("文件含有异常字符，请手动指定编码或检查文件。", True)
     if encoding != "auto":
         try:
-            return _valid_text(data.decode(encoding, errors="strict")), encoding
+            if encoding in ("utf-8", "utf-8-sig", "gb18030", "gbk"):
+                return _decode_byte_oriented(data, encoding), encoding
+            return _decode_utf16(data, encoding), encoding
         except UnicodeError:
             raise ImportError("所选编码无法读取这个文件，请尝试其他编码。", True) from None
     for bom, codec in [(b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")]:
         if data.startswith(bom):
             return decode_text(data, codec)
-    try:
-        return _valid_text(data.decode("utf-8", errors="strict")), "utf-8"
-    except UnicodeError:
-        pass
-    # BOM-less UTF-16 and legacy encodings remain ambiguous: offer an explicit choice.
-    sample = data[:128000]
-    guess = from_bytes(sample).best()
-    if guess and guess.encoding in {"gb18030", "gb2312", "gbk", "cp936"} and guess.chaos < 0.05:
+    if len(data) >= 4 and len(data) % 2 == 0:
+        probe_b = data[:8192]
+        half = len(probe_b) // 2
+        even_nulls = probe_b[0::2].count(0)
+        odd_nulls = probe_b[1::2].count(0)
+        utf16_lane = (
+            "utf-16-le" if odd_nulls >= max(2, half // 4) and even_nulls <= max(2, half // 50)
+            else "utf-16-be" if even_nulls >= max(2, half // 4) and odd_nulls <= max(2, half // 50)
+            else ""
+        )
+        if utf16_lane:
+            try:
+                return _decode_utf16(data, utf16_lane, require_cohesive=True), utf16_lane
+            except (UnicodeError, ImportError):
+                pass
+    if _quick_utf8_prefix_ok(data):
         try:
-            text = data.decode("gb18030", errors="strict")
-            if sum("\u3400" <= c <= "\u9fff" for c in text) / max(1, len(text)) > 0.15:
-                return _valid_text(text), "gb18030"
+            return _decode_byte_oriented(data, "utf-8"), "utf-8"
+        except UnicodeError:
+            pass
+    if len(data) >= 4 and len(data) % 2 == 0:
+        probe_b = data[:8192]
+        for codec in ("utf-16-le", "utf-16-be"):
+            if _looks_like_bomless_utf16(probe_b, codec):
+                try:
+                    return _decode_utf16(data, codec, require_cohesive=True), codec
+                except (UnicodeError, ImportError):
+                    pass
+    raw_sample = data[:24576]
+    clean_sample = raw_sample.translate(_BYTE_NORM_TABLE, delete=_BYTE_DELETE_CTRLS)
+    if len(data) > 24576:
+        last_nl = clean_sample.rfind(b"\n")
+        if last_nl >= 8192:
+            clean_sample = clean_sample[:last_nl]
+    guess = from_bytes(clean_sample).best()
+    gb_encodings = {"gb18030", "gb2312", "gbk", "cp936"}
+    if guess is None or guess.encoding in gb_encodings or (len(clean_sample) < 64 and guess.encoding == "cp949"):
+        try:
+            text = _decode_byte_oriented(data, "gb18030")
+            probe = text[:200000]
+            cjk_list = _CJK_RE.findall(probe)
+            if len(cjk_list) / max(1, len(probe)) > 0.15:
+                if guess is not None and guess.encoding in gb_encodings and guess.chaos < 0.08:
+                    return text, "gb18030"
+                cjk_str = "".join(cjk_list)
+                gb2312_ratio = (len(cjk_str.encode("gb2312", errors="ignore")) // 2) / len(cjk_str)
+                if gb2312_ratio >= 0.80 and not _PUA_RE.search(probe):
+                    return text, "gb18030"
         except UnicodeError:
             pass
     raise ImportError("无法可靠识别文字编码，请选择 GB18030、UTF-16 或其他编码重试。", True)
@@ -86,27 +330,115 @@ def split_section(key: str, title: str, text: str) -> list[Section]:
     return parts
 
 
-def parse_txt(text: str) -> list[Section]:
-    text = _valid_text(text)
-    heading = re.compile(r"^\s*(第[零〇一二三四五六七八九十百千万两\d]+[章回节卷部篇].{0,60}|(?:chapter|part)\s+\d+.{0,60}|序章|序言|楔子|尾声|后记)\s*$", re.I)
-    sections, lines, title, number = [], [], "正文", 0
-    def flush():
-        nonlocal number
-        body = re.sub(r"\n[ \t\n]*\n", "\n", "\n".join(lines)).strip()
+def _is_valid_heading_line(line: str) -> tuple[bool, bool]:
+    """Return (is_heading, is_numbered) for a stripped candidate line."""
+    if not line or len(line) > 70 or line[-1] in "。；;":
+        return False, False
+    if _HEADING_RE.fullmatch(line):
+        if line[0] in "第卷" and " " not in line and "\u3000" not in line and "\t" not in line:
+            if line[-1] in "！？!?" and not any(sep in line for sep in ":：、.-—·】]"):
+                return False, False
+        en_bare = _EN_BARE_SPACE_RE.fullmatch(line)
+        if en_bare:
+            rest = en_bare.group(1)
+            if rest.endswith(".") or re.match(_EN_PROSE_GLUE, rest, re.I) or line[0].islower():
+                return False, False
+        elif line[0].isascii() and line[0].isalpha() and line.endswith("."):
+            if not re.fullmatch(r"(?:chapter|part|book|volume|prologue|epilogue)\s+(?:\d+|[ivxlcdm]+)\.", line, re.I):
+                return False, False
+        return True, False
+    if len(line) <= 48 and _NUMBERED_HEADING_RE.fullmatch(line):
+        if line[-1] in "！？，、：:.,．!?;…\"'”’」』":
+            return False, False
+        if any(ch in line for ch in "。！？；") or ("，" in line and len(line) > 24):
+            return False, False
+        return True, True
+    return False, False
+
+
+def _collapse_blank_lines(text: str) -> str:
+    if any(tok in text for tok in (" \n", "\t\n", "\f\n", "\u3000\n")):
+        text = _TRAIL_WS_RE.sub("", text)
+    for _ in range(3):
+        if "\n\n" not in text:
+            break
+        text = text.replace("\n\n", "\n")
+    if "\n\n" in text:
+        text = _MULTI_NL_RE.sub("\n", text)
+    return text
+
+
+def _parse_validated_txt(text: str) -> list[Section]:
+    cleaned = _collapse_blank_lines(text)
+    c_start = 0
+    c_end = len(cleaned)
+    while c_start < c_end and cleaned[c_start] == "\n":
+        c_start += 1
+    while c_end > c_start and cleaned[c_end - 1] == "\n":
+        c_end -= 1
+    raw_candidates = []
+    first_nl = cleaned.find("\n", c_start, c_end)
+    first_end = c_end if first_nl < 0 else first_nl
+    if first_end - c_start <= 108:
+        first_stripped = cleaned[c_start:first_end].strip()
+        ok, is_num = _is_valid_heading_line(first_stripped)
+        if ok:
+            raw_candidates.append((c_start, first_end, first_stripped, is_num))
+    if first_nl >= 0:
+        for match in _STAGE1_HEADING_RE.finditer(cleaned, c_start, c_end):
+            line_start = match.start() + 1
+            line_end = match.end()
+            stripped = cleaned[line_start:line_end].strip()
+            ok, is_num = _is_valid_heading_line(stripped)
+            if ok:
+                raw_candidates.append((line_start, line_end, stripped, is_num))
+        last_nl = cleaned.rfind("\n", c_start, c_end)
+        if last_nl >= 0 and c_end - (last_nl + 1) <= 108:
+            last_start = last_nl + 1
+            if not raw_candidates or raw_candidates[-1][0] != last_start:
+                last_stripped = cleaned[last_start:c_end].strip()
+                ok, is_num = _is_valid_heading_line(last_stripped)
+                if ok:
+                    raw_candidates.append((last_start, c_end, last_stripped, is_num))
+    headings = []
+    for idx, (h_start, h_end, h_title, is_num) in enumerate(raw_candidates):
+        if is_num:
+            # Reject consecutive numbered list items (`1. a\n2. b`) with no body lines between them.
+            if idx > 0 and raw_candidates[idx - 1][3] and raw_candidates[idx - 1][1] + 1 >= h_start:
+                continue
+            if idx + 1 < len(raw_candidates) and raw_candidates[idx + 1][3] and h_end + 1 >= raw_candidates[idx + 1][0]:
+                continue
+            # Reject numbered lines introduced by a colon or unclosed quote on the previous line, or trailing at EOF.
+            if h_end >= c_end or not cleaned[h_end:c_end].strip():
+                continue
+            if h_start > c_start:
+                prev_nl = cleaned.rfind("\n", c_start, h_start - 1)
+                prev_start = c_start if prev_nl < 0 else prev_nl + 1
+                prev_line = cleaned[prev_start:h_start - 1].strip()
+                if prev_line.endswith(("：", ":")) or prev_line.count("“") > prev_line.count("”"):
+                    continue
+        headings.append((h_start, h_end, h_title))
+    sections = []
+    title = "正文"
+    number = 0
+    pos = c_start
+    for h_start, h_end, h_title in headings:
+        body = cleaned[pos:h_start].strip()
         if body:
             sections.extend(split_section(f"txt:{number}", title, body))
             number += 1
-    for line in text.split("\n"):
-        if heading.fullmatch(line):
-            flush()
-            lines = []
-            title = line.strip()
-        else:
-            lines.append(line.rstrip())
-    flush()
+        title = h_title
+        pos = h_end + 1
+    body = cleaned[pos:c_end].strip()
+    if body:
+        sections.extend(split_section(f"txt:{number}", title, body))
     if not sections:
-        sections = split_section("txt:0", title, text)
+        sections = split_section("txt:0", title, cleaned[c_start:c_end].strip() or text.strip())
     return sections
+
+
+def parse_txt(text: str) -> list[Section]:
+    return _parse_validated_txt(_valid_text(text))
 
 
 class TextExtractor(HTMLParser):
@@ -620,7 +952,7 @@ def read_epub_title(file: str | Path) -> str | None:
         if not path.is_file():
             raise ImportError("文件不存在或无法访问，请重新定位文件。")
         if path.stat().st_size > MAX_FILE:
-            raise ImportError("文件超过 32 MiB，当前版本暂不支持。")
+            raise ImportError("文件超过 64 MiB，当前版本暂不支持。")
         with zipfile.ZipFile(path) as archive:
             _opf, _base, metadata = _read_epub_package(archive)
             title = next(iter(_epub_metadata_values(metadata, "title")), None)
@@ -772,16 +1104,162 @@ def _load_epub(path: Path) -> tuple[str, str, list[Section]]:
         raise ImportError("EPUB 结构损坏、内容缺失或 XML 不受支持，无法读取。") from None
 
 
+def _wait_for_pdf_document(document: QPdfDocument) -> None:
+    if document.status() != QPdfDocument.Status.Loading:
+        return
+
+    event_loop = QEventLoop()
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+
+    def finish_loading(*_):
+        if document.status() != QPdfDocument.Status.Loading:
+            event_loop.quit()
+
+    document.statusChanged.connect(finish_loading)
+    timeout.timeout.connect(event_loop.quit)
+    timeout.start(PDF_LOAD_TIMEOUT_MS)
+    if document.status() == QPdfDocument.Status.Loading:
+        event_loop.exec()
+    timeout.stop()
+    document.statusChanged.disconnect(finish_loading)
+    if document.status() == QPdfDocument.Status.Loading:
+        raise ImportError("读取 PDF 超时，请检查文件后重试。")
+
+
+def _pdf_error(error) -> ImportError:
+    if error == QPdfDocument.Error.IncorrectPassword:
+        return ImportError("PDF 受密码保护，当前版本暂不支持。")
+    if error == QPdfDocument.Error.UnsupportedSecurityScheme:
+        return ImportError("PDF 使用了当前版本不支持的加密方式。")
+    return ImportError("这不是有效或可读取的 PDF 文件。")
+
+
+def _pdf_metadata(document: QPdfDocument, field, limit: int) -> str:
+    try:
+        value = document.metaData(field)
+    except (RuntimeError, TypeError, ValueError):
+        return ""
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:limit]
+
+
+def _render_pdf_page(document: QPdfDocument, page_index: int) -> bytes:
+    page_size = document.pagePointSize(page_index)
+    width_pt, height_pt = float(page_size.width()), float(page_size.height())
+    if not (math.isfinite(width_pt) and math.isfinite(height_pt) and width_pt > 0 and height_pt > 0):
+        raise ImportError("PDF 页面尺寸无效，无法渲染。")
+
+    page_area = width_pt * height_pt
+    if not math.isfinite(page_area) or page_area <= 0:
+        raise ImportError("PDF 页面尺寸无效，无法渲染。")
+    scale = min(
+        2.0,
+        MAX_PDF_RENDER_EDGE / max(width_pt, height_pt),
+        (MAX_PDF_RENDER_PIXELS / page_area) ** 0.5,
+    )
+    target_size = QSize(max(1, round(width_pt * scale)), max(1, round(height_pt * scale)))
+    image = document.render(page_index, target_size)
+    if image.isNull():
+        raise ImportError("PDF 页面无法渲染，请检查文件。")
+
+    canvas = QImage(image.size(), QImage.Format.Format_RGB32)
+    canvas.fill(QColor("white"))
+    painter = QPainter(canvas)
+    if not painter.isActive():
+        raise ImportError("无法准备 PDF 页面图像。")
+    painter.drawImage(0, 0, image)
+    painter.end()
+
+    buffer = QBuffer()
+    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+        raise ImportError("无法编码 PDF 页面图像。")
+    saved = canvas.save(buffer, "JPEG", PDF_IMAGE_QUALITY)
+    payload = bytes(buffer.data())
+    buffer.close()
+    if not saved or not payload:
+        raise ImportError("无法编码 PDF 页面图像。")
+    return payload
+
+
+def _load_pdf(path: Path) -> tuple[str, str, list[Section], list[NavigationEntry], dict[str, str]]:
+    document = QPdfDocument()
+    try:
+        error = document.load(str(path))
+        if error != QPdfDocument.Error.None_:
+            raise _pdf_error(error)
+        _wait_for_pdf_document(document)
+        if document.status() != QPdfDocument.Status.Ready:
+            raise _pdf_error(document.error())
+
+        page_count = document.pageCount()
+        if page_count <= 0:
+            raise ImportError("PDF 中没有可阅读的页面。")
+        if page_count > MAX_PDF_PAGES:
+            raise ImportError("PDF 页数超过当前支持上限（4096 页）。")
+
+        title = _pdf_metadata(document, QPdfDocument.MetaDataField.Title, 300) or path.stem
+        author = _pdf_metadata(document, QPdfDocument.MetaDataField.Author, 300)
+        description = _pdf_metadata(document, QPdfDocument.MetaDataField.Subject, 4000)
+        sections = []
+        page_list = []
+        output_size = 0
+
+        for page_index in range(page_count):
+            page_label = document.pageLabel(page_index).strip() or str(page_index + 1)
+            page_title = f"第 {page_label} 页"[:160]
+            source_path = f"pdf:{page_index + 1}"
+            page_list.append(NavigationEntry(page_title, source_path, source_offset=0))
+
+            try:
+                text = _valid_text(document.getAllText(page_index).text())
+            except Exception:
+                text = ""
+            text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+            if text:
+                output_size += len(text.encode("utf-8"))
+                if output_size > MAX_PDF_OUTPUT:
+                    raise ImportError("PDF 提取的文字或页面图像过大，当前版本无法安全读取。")
+                page_sections = split_section(f"pdf:{page_index + 1}", page_title, text)
+                for section in page_sections:
+                    section.source_path = source_path
+                sections.extend(page_sections)
+            else:
+                payload = _render_pdf_page(document, page_index)
+                output_size += len(payload)
+                sections.append(Section(
+                    f"pdf:{page_index + 1}:0",
+                    page_title,
+                    "\ufffc",
+                    images={0: payload},
+                    source_path=source_path,
+                ))
+
+            if output_size > MAX_PDF_OUTPUT:
+                raise ImportError("PDF 提取的文字或页面图像过大，当前版本无法安全读取。")
+
+        metadata = {"description": description}
+        return title, author, sections, page_list, metadata
+    except ImportError:
+        raise
+    except Exception:
+        raise ImportError("PDF 结构损坏或页面内容不受支持，无法读取。") from None
+    finally:
+        document.close()
+
+
 def load_book(file: str | Path, encoding="auto") -> Book:
     path = Path(file)
     try:
-        if path.suffix.lower() not in (".txt", ".epub"):
-            raise ImportError("请选择 TXT 或未加密的 EPUB 文件。")
+        if path.suffix.lower() not in (".txt", ".epub", ".pdf"):
+            raise ImportError("请选择 TXT、EPUB 或 PDF 文件。")
         if not path.is_file():
             raise ImportError("文件不存在或无法访问，请重新定位文件。")
         size = path.stat().st_size
         if size > MAX_FILE:
-            raise ImportError("文件超过 32 MiB，当前版本暂不支持。")
+            raise ImportError("文件超过 64 MiB，当前版本暂不支持。")
         if size == 0:
             raise ImportError("这个文件是空的。")
         path = path.resolve()
@@ -790,9 +1268,12 @@ def load_book(file: str | Path, encoding="auto") -> Book:
             with path.open("rb") as stream:
                 data = stream.read(MAX_FILE + 1)
             if len(data) > MAX_FILE:
-                raise ImportError("文件超过 32 MiB，当前版本暂不支持。")
+                raise ImportError("文件超过 64 MiB，当前版本暂不支持。")
             text, detected = decode_text(data, encoding)
-            return Book(book_id, str(path), path.stem, sections=parse_txt(text), encoding=detected)
+            return Book(book_id, str(path), path.stem, sections=_parse_validated_txt(text), encoding=detected)
+        if path.suffix.lower() == ".pdf":
+            title, author, sections, page_list, metadata = _load_pdf(path)
+            return Book(book_id, str(path), title, author, sections, "PDF", page_list=page_list, **metadata)
         title, author, sections, navigation, metadata = _load_epub(path)
         return Book(book_id, str(path), title, author, sections, "EPUB", navigation["toc"], navigation["page_list"], navigation["landmarks"], **metadata)
     except ImportError:

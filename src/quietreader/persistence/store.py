@@ -11,6 +11,8 @@ MAX_BOOKMARKS = 200
 MAX_BOOKMARK_NOTE = 1000
 MAX_BOOK_RECORDS = 500
 MAX_BOOK_TITLE_OVERRIDE = 200
+MAX_JUMP_HISTORY = 30
+MAX_JUMP_HISTORY_BOOKS = 100
 
 
 def _clean_books(raw):
@@ -75,6 +77,31 @@ def _clean_bookmarks(raw):
     return clean
 
 
+def _clean_jump_history(raw):
+    if not isinstance(raw, dict):
+        return {}
+    clean = {}
+    recent_books = list(raw.items())[-MAX_JUMP_HISTORY_BOOKS:]
+    for book_id, records in recent_books:
+        if not isinstance(book_id, str) or not book_id or len(book_id) > 100 or not isinstance(records, list):
+            continue
+        rows = []
+        for record in records[-MAX_JUMP_HISTORY:]:
+            if not isinstance(record, dict):
+                continue
+            section_id = record.get("section_id")
+            offset = record.get("offset")
+            if (
+                not isinstance(section_id, str) or not section_id or len(section_id) > 200
+                or type(offset) is not int or not 0 <= offset <= 100_000_000
+            ):
+                continue
+            rows.append({"section_id": section_id, "offset": offset})
+        if rows:
+            clean[book_id] = rows
+    return clean
+
+
 def initial_state():
     return {
         "version": VERSION,
@@ -82,6 +109,8 @@ def initial_state():
         "books": [],
         "positions": {},
         "bookmarks": {},
+        "jump_history": {},
+        "forward_history": {},
         "last_book": "",
         "last_browse_dir": "",
         "last_update_check": 0,
@@ -123,6 +152,8 @@ class StateStore:
                 clean["books"] = _clean_books(books)
                 clean["positions"] = {k: p for k, p in positions.items() if isinstance(k, str) and isinstance(p, dict) and isinstance(p.get("section_id"), str) and type(p.get("offset")) is int}
                 clean["bookmarks"] = _clean_bookmarks(value.get("bookmarks", {}))
+                clean["jump_history"] = _clean_jump_history(value.get("jump_history", {}))
+                clean["forward_history"] = _clean_jump_history(value.get("forward_history", {}))
                 clean["last_book"] = value.get("last_book", "") if isinstance(value.get("last_book", ""), str) else ""
                 browse_dir = value.get("last_browse_dir", "")
                 if isinstance(browse_dir, str) and "\x00" not in browse_dir and len(browse_dir) <= 4096:

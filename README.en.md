@@ -4,7 +4,7 @@
 
 <p align="center"><img src="src/quietreader/assets/quietreader.png" alt="QuietReader icon" width="128"></p>
 
-QuietReader is an offline-first desktop reader for Windows, built with Python and PySide6. It reads local TXT and EPUB books and includes a bookshelf, navigation, bookmarks, live layout controls, and a distraction-free Focus mode. Books and reading progress stay on your computer.
+QuietReader is an offline-first desktop reader for Windows, built with Python and PySide6. It reads local TXT, EPUB, and PDF books and includes a bookshelf, navigation, bookmarks, live layout controls, and a distraction-free Focus mode. Books and reading progress stay on your computer.
 
 ## Screenshots
 
@@ -12,7 +12,7 @@ QuietReader is an offline-first desktop reader for Windows, built with Python an
 
 ![The reading view before a book has been opened](docs/screenshots/reader-empty.png)
 
-Press `Ctrl+O` to choose a local TXT or EPUB file, or drag a file into the window. After importing, open the book from the bookshelf.
+Press `Ctrl+O` to choose a local TXT, EPUB, or PDF file, or drag a file into the window. After importing, open the book from the bookshelf.
 
 ![An open EPUB with the table of contents on the left and chapter and book progress at the bottom](docs/screenshots/reader-open.png)
 
@@ -79,6 +79,7 @@ Click a binding to record a new shortcut. With global shortcuts enabled, you can
 
 - **TXT reading** with automatic detection for common encodings and manual encoding selection when text looks garbled.
 - **EPUB reading** for common EPUB 2/3 reflowable books, including navigation, internal links, page lists, covers, metadata, text formatting, and embedded illustrations.
+- **PDF reading** that reflows extractable text and renders pages without extractable text as images for scanned PDFs.
 - **Local bookshelf** with recent books, all books, and custom categories. Adding a book copies it into the QuietReader library; moving it to a category moves that managed copy and leaves the original file untouched.
 - **Reading tools** including a table of contents, bookmarks and notes, book information, saved positions, and a collapsible sidebar.
 - **Live typography controls** for font size, font family, line height, letter spacing, paragraph spacing, and page padding.
@@ -131,7 +132,7 @@ To open a local book directly:
 
 ## Formats and local data
 
-QuietReader currently targets common TXT and unencrypted, reflowable EPUB files. DRM-protected resources, fixed-layout EPUB, active content, and external network resources are not supported. Complex publisher styles may affect layout.
+QuietReader supports common TXT, unencrypted reflowable EPUB, and PDF files up to 64 MiB and 4,096 pages. Password-protected PDFs and files the bundled Qt PDF engine cannot read are unsupported. Each PDF page is extracted as text or rendered as an image; scanned pages are not OCR-processed.
 
 Preferences and books are stored in a `data` folder under the reader root. For source runs, this is `data\` under the repository root. For a release, it is `data\` beside `QuietReader.exe`. Configuration, reading positions, and bookmarks are in `data\state.json`; imported book copies are under `data\bookshelf\uncategorized\` or `data\bookshelf\<category>\`. The on-disk names `bookshelf` and `uncategorized` are English; the interface still translates the labels according to the selected language.
 
