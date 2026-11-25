@@ -4743,7 +4743,7 @@ class MainWindow(QMainWindow):
             language=settings.language,
             font_family=settings.font_family,
             adjust_key=settings.focus_adjust_key,
-            background_color=self._sampled_focus_color if self.moyu_mode else "",
+            background_color=self._effective_focus_background() if self.moyu_mode else "",
         )
         if self.moyu_mode:
             self.setMinimumSize(180, self.moyu_strip.minimumHeight())

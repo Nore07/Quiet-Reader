@@ -624,13 +624,15 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     QTreeView#fileDialogView::item:hover {{ background: {accent_hover}; }}
     QTreeView#fileDialogView QHeaderView::section {{ background: {c['side']}; color: {c['muted']}; border: none; border-bottom: 1px solid {c['line']}; padding: 9px 10px 6px 10px; font-weight: 600; }}
     QTreeView#fileDialogView QHeaderView::section:hover {{ color: {c['ink']}; background: {accent_hover}; }}
-    QComboBox#fileFilterCombo {{ background: {c['side']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 6px 32px 6px 10px; min-height: 24px; }}
-    QComboBox#fileFilterCombo:hover {{ background: {accent_hover}; border-color: {line_strong}; }}
-    QComboBox#fileFilterCombo:focus {{ border-color: {c['accent']}; }}
-    QComboBox#fileFilterCombo::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 28px; border: none; border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
-    QComboBox#fileFilterCombo::drop-down:hover {{ background: {c['selected']}; }}
+    QComboBox#fileFilterCombo, QComboBox#importSourceCombo {{ background: {elevated}; border: 1px solid {c['line']}; border-radius: {RADIUS_CONTROL}px; padding: 5px 30px 5px 10px; min-height: 22px; }}
+    QComboBox#fileFilterCombo {{ background: {c['side']}; border-radius: 8px; padding: 6px 32px 6px 10px; min-height: 24px; }}
+    QComboBox#fileFilterCombo:hover, QComboBox#importSourceCombo:hover {{ background: {accent_hover}; border-color: {line_strong}; }}
+    QComboBox#fileFilterCombo:focus, QComboBox#importSourceCombo:focus {{ border-color: {c['accent']}; }}
+    QComboBox#fileFilterCombo::drop-down, QComboBox#importSourceCombo::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 28px; border: none; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }}
+    QComboBox#fileFilterCombo::drop-down:hover, QComboBox#importSourceCombo::drop-down:hover {{ background: {c['selected']}; }}
     QComboBox#fileFilterCombo::down-arrow {{ image: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid {c['muted']}; margin-top: 2px; }}
-    QComboBox#fileFilterCombo QAbstractItemView {{ background: {elevated}; color: {c['ink']}; selection-background-color: {c['selected']}; selection-color: {c['ink']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 4px; outline: 0; }}
+    QComboBox#importSourceCombo::down-arrow {{ image: none; width: 0; height: 0; border: none; }}
+    QComboBox#fileFilterCombo QAbstractItemView, QComboBox#importSourceCombo QAbstractItemView {{ background: {elevated}; color: {c['ink']}; selection-background-color: {c['selected']}; selection-color: {c['ink']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 4px; outline: 0; }}
 
     /* Toast notice */
     QFrame#toastNotice {{ background: {elevated}; border: 1px solid {c['accent']}; border-radius: 10px; }}

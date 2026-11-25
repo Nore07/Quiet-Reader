@@ -3,11 +3,12 @@
 from dataclasses import asdict, is_dataclass
 import re
 
-from PySide6.QtCore import QEvent, QRect, Qt
-from PySide6.QtGui import QFontMetrics, QGuiApplication
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPlainTextEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QRadioButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QVBoxLayout, QWidget,
 )
 
 from quietreader.i18n import tr
@@ -476,6 +477,154 @@ class TermNoteDialog(QDialog):
         return super().eventFilter(watched, event)
 
 
+class _ChevronComboBox(QComboBox):
+    """QComboBox with a crisp vector downward chevron instead of a CSS border triangle."""
+
+    def __init__(self, arrow_color: str, parent=None):
+        super().__init__(parent)
+        self._arrow_color = arrow_color
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        cx = self.width() - 15.0
+        cy = self.height() / 2.0
+        pen = QPen(QColor(self._arrow_color), 1.6, Qt.PenStyle.SolidLine)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        path = QPainterPath()
+        path.moveTo(cx - 3.5, cy - 1.8)
+        path.lineTo(cx, cy + 2.0)
+        path.lineTo(cx + 3.5, cy - 1.8)
+        painter.drawPath(path)
+
+
+class _ImportTermDelegate(QStyledItemDelegate):
+    """Crisp theme-matched checkbox and two-line item renderer for ImportTermNotesDialog."""
+
+    def __init__(self, palette: dict, parent=None):
+        super().__init__(parent)
+        self._palette = dict(palette)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = opt.widget
+        style = widget.style() if widget is not None else None
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
+        c = self._palette
+        row_rect = QRectF(opt.rect).adjusted(2.0, 1.0, -2.0, -1.0)
+        if opt.state & QStyle.StateFlag.State_Selected:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(c["selected"]))
+            painter.drawRoundedRect(row_rect, 6.0, 6.0)
+        elif opt.state & QStyle.StateFlag.State_MouseOver:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(c.get("accent_hover", c["button"])))
+            painter.drawRoundedRect(row_rect, 6.0, 6.0)
+
+        if style is not None:
+            ind_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, widget)
+            text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, widget)
+        else:
+            ind_rect = QRect(opt.rect.left() + 8, opt.rect.top() + (opt.rect.height() - 16) // 2, 16, 16)
+            text_rect = opt.rect.adjusted(32, 4, -8, -4)
+
+        box_size = 15.0
+        bx = ind_rect.center().x() - box_size / 2.0 + 0.5
+        by = opt.rect.center().y() - box_size / 2.0 + 0.5
+        box_rect = QRectF(bx, by, box_size, box_size)
+        checked = opt.checkState == Qt.CheckState.Checked
+
+        if checked:
+            accent = QColor(c["accent"])
+            painter.setPen(QPen(accent, 1.4))
+            painter.setBrush(accent)
+            painter.drawRoundedRect(box_rect, 4.0, 4.0)
+            check_pen = QPen(QColor(c.get("on_accent", c["paper"])), 1.9, Qt.PenStyle.SolidLine)
+            check_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            check_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(check_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            path = QPainterPath()
+            path.moveTo(bx + 3.4, by + 7.8)
+            path.lineTo(bx + 6.3, by + 10.7)
+            path.lineTo(bx + 11.7, by + 4.7)
+            painter.drawPath(path)
+        else:
+            painter.setPen(QPen(QColor(c.get("line_strong", c["line"])), 1.5))
+            painter.setBrush(QColor(c.get("elevated", c["paper"])))
+            painter.drawRoundedRect(box_rect, 4.0, 4.0)
+
+        term = index.data(Qt.ItemDataRole.UserRole) or ""
+        note_flat = index.data(Qt.ItemDataRole.UserRole + 2) or ""
+        exists_tag = index.data(Qt.ItemDataRole.UserRole + 3) or ""
+
+        left_x = max(text_rect.left(), int(bx + box_size + 10))
+        right_x = opt.rect.right() - 10
+        avail_w = max(40, right_x - left_x)
+
+        title_font = QFont(opt.font)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        title_metrics = QFontMetrics(title_font)
+
+        body_font = QFont(opt.font)
+        if body_font.pixelSize() > 0:
+            body_font.setPixelSize(max(11, body_font.pixelSize() - 1))
+        elif body_font.pointSizeF() > 0:
+            body_font.setPointSizeF(max(8.5, body_font.pointSizeF() - 0.5))
+        body_metrics = QFontMetrics(body_font)
+
+        line_gap = 2
+        total_h = title_metrics.height() + (line_gap + body_metrics.height() if note_flat else 0)
+        top_y = opt.rect.top() + max(4, (opt.rect.height() - total_h) // 2)
+
+        tag_w = 0
+        if exists_tag:
+            tag_w = body_metrics.horizontalAdvance(exists_tag) + 10
+        term_elided = title_metrics.elidedText(term, Qt.TextElideMode.ElideRight, max(24, avail_w - tag_w))
+        painter.setFont(title_font)
+        painter.setPen(QColor(c["ink"]))
+        painter.drawText(
+            QRect(left_x, top_y, max(24, avail_w - tag_w), title_metrics.height()),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            term_elided,
+        )
+        if exists_tag:
+            term_w = title_metrics.horizontalAdvance(term_elided)
+            tag_x = min(right_x - tag_w + 6, left_x + term_w + 8)
+            painter.setFont(body_font)
+            painter.setPen(QColor(c["accent"]))
+            painter.drawText(
+                QRect(tag_x, top_y, max(16, right_x - tag_x), title_metrics.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                exists_tag,
+            )
+
+        if note_flat:
+            body_elided = body_metrics.elidedText(note_flat, Qt.TextElideMode.ElideRight, avail_w)
+            painter.setFont(body_font)
+            painter.setPen(QColor(c.get("ink_secondary", c["muted"])))
+            painter.drawText(
+                QRect(left_x, top_y + title_metrics.height() + line_gap, avail_w, body_metrics.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                body_elided,
+            )
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        metrics = QFontMetrics(option.font)
+        note_flat = index.data(Qt.ItemDataRole.UserRole + 2) or ""
+        h = metrics.height() * (2 if note_flat else 1) + (18 if note_flat else 14)
+        return QSize(max(120, option.rect.width()), max(44 if note_flat else 32, h))
+
+
 class ImportTermNotesDialog(QDialog):
     """Themed modal dialog for inheriting selected term notes from another book."""
 
@@ -492,10 +641,11 @@ class ImportTermNotesDialog(QDialog):
         self._language = language
         self._sources = list(sources or [])
         self._existing_terms = {t.casefold() for t in (existing_terms or set())}
+        self._palette = colors(theme)
 
         self.setModal(True)
         self.setWindowTitle(tr("从其他书继承词条", language))
-        self.setStyleSheet(stylesheet(colors(theme)))
+        self.setStyleSheet(stylesheet(self._palette))
         self.setMinimumWidth(420)
         self.resize(470, 490)
 
@@ -507,7 +657,8 @@ class ImportTermNotesDialog(QDialog):
         source_label.setObjectName("popoverLabel")
         outer.addWidget(source_label)
 
-        self.source_combo = QComboBox(self)
+        self.source_combo = _ChevronComboBox(self._palette["muted"], self)
+        self.source_combo.setObjectName("importSourceCombo")
         for src in self._sources:
             count = len(src.get("records") or [])
             title = src.get("title") or src.get("id") or ""
@@ -545,6 +696,7 @@ class ImportTermNotesDialog(QDialog):
         self.term_list.setObjectName("importTermList")
         self.term_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.term_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.term_list.setItemDelegate(_ImportTermDelegate(self._palette, self.term_list))
         self.term_list.itemChanged.connect(self._sync_counts)
         outer.addWidget(self.term_list, 1)
 
@@ -608,6 +760,8 @@ class ImportTermNotesDialog(QDialog):
             item.setCheckState(Qt.CheckState.Checked)
             item.setData(Qt.ItemDataRole.UserRole, term)
             item.setData(Qt.ItemDataRole.UserRole + 1, f"{term}\n{note}".casefold())
+            item.setData(Qt.ItemDataRole.UserRole + 2, note_flat)
+            item.setData(Qt.ItemDataRole.UserRole + 3, exists_tag if already_exists else "")
             item.setToolTip(f"{term}\n{note}")
             self.term_list.addItem(item)
         self.term_list.blockSignals(False)
