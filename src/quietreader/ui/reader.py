@@ -116,7 +116,7 @@ class PageView(QWidget):
             size = reader.size()
             if not size.isValid() or size.width() * size.height() > 32000000:
                 data.deleteLater()
-                raise ValueError("Unsupported or oversized EPUB illustration")
+                raise ValueError("Unsupported or oversized book image")
             reader.setAutoTransform(True)
             budget_edge = int(math.sqrt(16000000 / max(1, len(images or {}))))
             edge = min(2000, max(64, budget_edge))
@@ -124,7 +124,7 @@ class PageView(QWidget):
             image = reader.read()
             data.deleteLater()
             if image.isNull():
-                raise ValueError("Cannot decode EPUB illustration")
+                raise ValueError("Cannot decode book image")
             name = QUrl(f"quietreader-image:{position}")
             document.addResource(QTextDocument.ResourceType.ImageResource, name, image)
             loaded[position] = (name, image.size())
@@ -399,7 +399,7 @@ class PageView(QWidget):
             painter.drawText(box, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, tr("把喧闹\n留在书页之外。", self.settings.language))
             painter.setFont(QFont("Microsoft YaHei", 10))
             painter.setPen(QColor(c["muted"]))
-            painter.drawText(box.adjusted(0, 160, 0, 0), Qt.AlignmentFlag.AlignCenter, tr("添加一本 TXT 或 EPUB\n文件与进度，只保存在这台电脑。", self.settings.language))
+            painter.drawText(box.adjusted(0, 160, 0, 0), Qt.AlignmentFlag.AlignCenter, tr("添加一本 TXT、EPUB 或 PDF\n文件与进度，只保存在这台电脑。", self.settings.language))
             return
         pad = self.settings.padding
         painter.setClipRect(QRectF(pad, pad, max(1, self.width() - 2 * pad), self.page_height))

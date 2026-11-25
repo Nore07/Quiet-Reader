@@ -1033,7 +1033,7 @@ class MainWindow(QMainWindow):
                     "path": str(managed_path),
                     "title": self._import_book_title(managed_path),
                     "author": "",
-                    "encoding": "EPUB" if managed_path.suffix.lower() == ".epub" else "auto",
+                    "encoding": {".epub": "EPUB", ".pdf": "PDF"}.get(managed_path.suffix.lower(), "auto"),
                     "last_read": "",
                     "source_path": str(source_path),
                 }
@@ -1524,7 +1524,7 @@ class MainWindow(QMainWindow):
         self._refresh_shelf()
         self.set_status("{encoding} · {count} 个章节 / 分段 · 进度自动保存{author}", notify=False, encoding=book.encoding, count=len(book.sections), author=f" · {book.author}" if book.author else "")
         self.encoding_bar.hide()
-        self.encoding_button.setVisible(book.encoding != "EPUB" and self.main_pages.currentWidget() is self.reader_page)
+        self.encoding_button.setVisible(book.encoding not in ("EPUB", "PDF") and self.main_pages.currentWidget() is self.reader_page)
         self.encoding.setCurrentIndex(max(0, self.encoding.findData(book.encoding)))
         self._update_header_crumb()
         self.save_state()
@@ -2032,12 +2032,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tray_focus_action"):
             self.tray_focus_action.setEnabled(ready)
         if ready:
-            total = sum(len(s.text) for s in self.book.sections)
-            book_current = sum(len(s.text) for s in self.book.sections[:self.section_index]) + self.reader.offset
-            book_fraction = book_current / max(1, total)
-            if self.section_index == len(self.book.sections) - 1 and self.reader.page == self.reader.page_count - 1:
-                book_fraction = 1
-
             identity = self._chapter_identity(self.book.sections[self.section_index])
             chapter_start = self.section_index
             while chapter_start > 0 and self._chapter_identity(self.book.sections[chapter_start - 1]) == identity:
@@ -2051,6 +2045,20 @@ class MainWindow(QMainWindow):
             chapter_fraction = chapter_current / max(1, chapter_total)
             if self.section_index == chapter_end - 1 and self.reader.page == self.reader.page_count - 1:
                 chapter_fraction = 1
+
+            if self.book.encoding == "PDF":
+                pdf_page_indices = {}
+                for section in self.book.sections:
+                    if section.source_path not in pdf_page_indices:
+                        pdf_page_indices[section.source_path] = len(pdf_page_indices)
+                page_index = pdf_page_indices.get(identity, 0)
+                book_fraction = (page_index + chapter_fraction) / max(1, len(pdf_page_indices))
+            else:
+                total = sum(len(section.text) for section in self.book.sections)
+                book_current = sum(len(section.text) for section in self.book.sections[:self.section_index]) + self.reader.offset
+                book_fraction = book_current / max(1, total)
+                if self.section_index == len(self.book.sections) - 1 and self.reader.page == self.reader.page_count - 1:
+                    book_fraction = 1
 
             record = next((item for item in self.store.state["books"] if item.get("id") == self.book.id), None)
             if record is not None:
@@ -2208,7 +2216,7 @@ class MainWindow(QMainWindow):
             cover = render_cover_pixmap(title, width=36, height=48, radius=5.0, scale=scale, mini=True)
         else:
             title = self.book_title.text().strip() or self.book.title
-            fmt = "EPUB" if self.book.encoding == "EPUB" else "TXT"
+            fmt = {"EPUB": "EPUB", "PDF": "PDF"}.get(self.book.encoding, "TXT")
             parts = [part for part in (self.book.author.strip(), fmt, progress_pct) if part]
             meta = " · ".join(parts)
             cover = render_cover_pixmap(
@@ -2313,7 +2321,7 @@ class MainWindow(QMainWindow):
             self.focus_button.setVisible(reading_active and not self.focus_mode)
         if hasattr(self, "encoding_button"):
             self.encoding_button.setVisible(
-                reading_active and not self.focus_mode and self.book is not None and self.book.encoding != "EPUB"
+                reading_active and not self.focus_mode and self.book is not None and self.book.encoding not in ("EPUB", "PDF")
             )
         if hasattr(self, "sidebar"):
             if reading_active and not self.focus_mode and not self.sidebar_collapsed:
@@ -3301,7 +3309,7 @@ class MainWindow(QMainWindow):
             self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
             return
         if not valid_paths:
-            self.set_status("拖放仅支持本地 TXT 或 EPUB 文件。")
+            self.set_status("拖放仅支持本地 TXT、EPUB 或 PDF 文件。")
             return
         open_after = self.book is None and self.main_pages.currentWidget() is self.reader_page
         added = self.add_book_paths(valid_paths, open_after=open_after, skipped_count=skipped)

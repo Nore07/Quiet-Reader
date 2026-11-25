@@ -131,7 +131,7 @@ def _cached_typographic_cover(
         painter.setBrush(hill_color)
         painter.drawPath(hill)
     else:
-        # Format badge at top-right (EPUB / TXT)
+        # Format badge at top-right (EPUB / PDF / TXT)
         if fmt:
             badge_font = QFont("Segoe UI Variable Text", 8)
             badge_font.setWeight(QFont.Weight.DemiBold)

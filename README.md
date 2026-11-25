@@ -4,7 +4,7 @@
 
 <p align="center"><img src="src/quietreader/assets/quietreader.png" alt="QuietReader 图标" width="128"></p>
 
-QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与 PySide6 构建。它支持 TXT 和 EPUB，提供书架、目录、书签、排版调节和专注阅读；书籍与阅读进度保存在本机。
+QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与 PySide6 构建。它支持 TXT、EPUB 和 PDF，提供书架、目录、书签、排版调节和专注阅读；书籍与阅读进度保存在本机。
 
 ## 界面预览
 
@@ -12,7 +12,7 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 
 ![尚未打开书籍时的阅读页](docs/screenshots/reader-empty.png)
 
-按 `Ctrl+O` 选择本地 TXT 或 EPUB，也可把文件拖入窗口。导入后，可以在书架打开书籍。
+按 `Ctrl+O` 选择本地 TXT、EPUB 或 PDF，也可把文件拖入窗口。导入后，可以在书架打开书籍。
 
 ![打开 EPUB 后的阅读界面，左侧是目录，底部显示章节和全书进度](docs/screenshots/reader-open.png)
 
@@ -79,6 +79,7 @@ QuietReader 是一款面向 Windows 的离线本地阅读器，使用 Python 与
 
 - **TXT 阅读**：自动识别常见编码，遇到乱码时可手动选择编码。
 - **EPUB 阅读**：支持常见的 EPUB 2/3 重排版书籍、目录导航、书内链接、页码列表、封面、元数据、文字格式和内嵌插图。
+- **PDF 阅读**：逐页提取可读取的文字并按正文排版；没有可读取文字的页面会渲染为图像，适合扫描版 PDF。
 - **本地书架**：最近阅读、全部书籍与自建分类。添加书籍会复制到 QuietReader 的书架目录，分类时会移动书架内的副本，原始文件不受影响。
 - **阅读辅助**：目录、书签与笔记、书籍资料、阅读位置恢复、可折叠侧栏。
 - **实时排版**：字号、字体、行距、字距、段距和页边距可在阅读界面中即时预览。
@@ -131,7 +132,7 @@ py -3.12 -m venv .venv
 
 ## 格式与数据
 
-目前面向常见的 TXT 与未加密、重排版 EPUB。DRM 加密资源、固定版式 EPUB、活动内容和外部网络资源不在支持范围内；不同 EPUB 的样式复杂度可能影响排版效果。
+目前支持常见 TXT、未加密且可重排的 EPUB，以及不超过 64 MiB、4096 页的 PDF。密码保护或当前 Qt PDF 引擎无法读取的 PDF 不在支持范围内；扫描页不会进行 OCR。
 
 配置和书籍都保存在阅读器根目录下的 `data` 文件夹中：源码运行时位于仓库根目录的 `data\`，Releases 版位于 `QuietReader.exe` 所在目录的 `data\`。配置、阅读进度和书签保存在 `data\state.json`；导入的书籍副本保存在 `data\bookshelf\uncategorized\` 或 `data\bookshelf\<分类名>\` 中。磁盘上的 `bookshelf` 和 `uncategorized` 使用英文名称，界面仍会根据语言设置显示“书架 / Bookshelf”和“未分类 / Uncategorized”。
 
