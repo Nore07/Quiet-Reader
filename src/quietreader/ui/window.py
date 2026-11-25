@@ -1,8 +1,10 @@
 from bisect import bisect_right
+from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from html import escape as html_escape
+from math import ceil
 from pathlib import Path
 import os
 import re
@@ -199,8 +201,8 @@ class _SearchResultModel(QAbstractListModel):
             prefix = "…" if clipped_left else ""
             suffix = "…" if clipped_right else ""
             return (
-                f"{chapter} · {page_label}\n"
-                f"{prefix}{before}{match}{after}{suffix}"
+                f"{prefix}{before}{match}{after}{suffix}\n"
+                f"{chapter} · {page_label}"
             )
         if role == _SEARCH_CHAPTER_ROLE:
             return chapter
@@ -215,8 +217,8 @@ class _SearchResultModel(QAbstractListModel):
             prefix = "…" if clipped_left else ""
             suffix = "…" if clipped_right else ""
             return (
-                f"{chapter} · {page_label}\n"
-                f"{prefix}{before}{match}{after}{suffix}"
+                f"{prefix}{before}{match}{after}{suffix}\n"
+                f"{chapter} · {page_label}"
             )
         return None
 
@@ -241,6 +243,12 @@ class _SearchResultModel(QAbstractListModel):
         self._section_page_counts.clear()
         self._chapter_starts.clear()
         self._section_page_offsets.clear()
+        if self.matches:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(len(self.matches) - 1, 0),
+                [int(Qt.ItemDataRole.DisplayRole), int(Qt.ItemDataRole.SizeHintRole)],
+            )
 
     def _schedule_page(self, row: int):
         if row in self._pages or row in self._pending_pages:
@@ -358,27 +366,62 @@ class _SearchResultModel(QAbstractListModel):
 
 
 class _SearchResultDelegate(QStyledItemDelegate):
-    NARROW_ROW_HEIGHT = 90
-    MEDIUM_ROW_HEIGHT = 102
-    WIDE_ROW_HEIGHT = 112
-
     def __init__(self, owner, parent=None):
         super().__init__(parent)
         self.owner = owner
         self._palette = colors(owner.settings.theme)
+        self._size_cache = OrderedDict()
 
     def apply_palette(self, palette: dict[str, str]):
         self._palette = dict(palette)
 
+    def _body_document(self, snippet, font):
+        before, match, after, clipped_left, clipped_right = snippet
+        prefix = "…" if clipped_left else ""
+        suffix = "…" if clipped_right else ""
+        highlight_style = (
+            f"background-color:{self._palette['accent_soft']};"
+            f"color:{self._palette['accent']};font-weight:700"
+        )
+        body_html = (
+            f"{html_escape(prefix + before)}"
+            f"<span style=\"{highlight_style}\">{html_escape(match)}</span>"
+            f"{html_escape(after + suffix)}"
+        )
+        body = QTextDocument()
+        body.setDocumentMargin(0)
+        body.setDefaultFont(font)
+        body.setHtml(f"<p style=\"margin:0;color:{self._palette['ink']}\">{body_html}</p>")
+        return body
+
     def sizeHint(self, option, index):
         width = max(0, option.rect.width()) or self.owner.search_results.viewport().width()
-        if width < 250:
-            height = self.NARROW_ROW_HEIGHT
-        elif width < 340:
-            height = self.MEDIUM_ROW_HEIGHT
+        snippet = index.data(_SEARCH_SNIPPET_ROLE) or ("", "", "", False, False)
+        body_font = QFont(option.font)
+        body_font.setPointSizeF(10.5)
+        available_body_width = max(1, width - 6 - 16)
+        # Round down so the measured height never underestimates the painted text.
+        body_width = max(1, available_body_width // 8 * 8)
+        font_signature = (
+            body_font.family(),
+            body_font.pointSizeF(),
+            body_font.pixelSize(),
+            int(body_font.weight()),
+        )
+        cache_key = (index.row(), body_width, font_signature)
+        cached = self._size_cache.get(cache_key)
+        if cached is not None and cached[0] == snippet:
+            self._size_cache.move_to_end(cache_key)
+            body_height = cached[1]
         else:
-            height = self.WIDE_ROW_HEIGHT
-        return QSize(width, height)
+            body = self._body_document(snippet, body_font)
+            body.setTextWidth(body_width)
+            body_height = body.size().height()
+            self._size_cache[cache_key] = (snippet, body_height)
+            self._size_cache.move_to_end(cache_key)
+            while len(self._size_cache) > 512:
+                self._size_cache.popitem(last=False)
+        return QSize(width, max(64, ceil(body_height) + 46))
 
     def paint(self, painter, option, index):
         palette = self._palette
@@ -405,9 +448,10 @@ class _SearchResultDelegate(QStyledItemDelegate):
         heading_font.setWeight(QFont.Weight.DemiBold)
         metrics = QFontMetrics(heading_font)
         page_width = metrics.horizontalAdvance(page_label)
-        heading = card.adjusted(8, 5, -8, 0)
-        page_rect = heading.adjusted(max(0, heading.width() - page_width), 0, 0, 0)
-        chapter_rect = heading.adjusted(0, 0, -(page_width + 8), 0)
+        footer = card.adjusted(8, 0, -8, -7)
+        footer.setTop(footer.bottom() - 17)
+        page_rect = footer.adjusted(max(0, footer.width() - page_width), 0, 0, 0)
+        chapter_rect = footer.adjusted(0, 0, -(page_width + 8), 0)
         painter.setFont(heading_font)
         painter.setPen(QColor(palette["muted"]))
         painter.drawText(
@@ -418,27 +462,12 @@ class _SearchResultDelegate(QStyledItemDelegate):
         painter.setPen(QColor(palette["ink_secondary"]))
         painter.drawText(page_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, page_label)
 
-        before, match, after, clipped_left, clipped_right = index.data(_SEARCH_SNIPPET_ROLE)
-        prefix = "…" if clipped_left else ""
-        suffix = "…" if clipped_right else ""
-        highlight_style = (
-            f"background-color:{palette['accent_soft']};"
-            f"color:{palette['accent']};font-weight:700"
-        )
-        body_html = (
-            f"{html_escape(prefix + before)}"
-            f"<span style=\"{highlight_style}\">{html_escape(match)}</span>"
-            f"{html_escape(after + suffix)}"
-        )
-        body = QTextDocument()
-        body.setDocumentMargin(0)
+        snippet = index.data(_SEARCH_SNIPPET_ROLE)
         body_font = QFont(option.font)
         body_font.setPointSizeF(10.5)
-        body.setDefaultFont(body_font)
-        body.setHtml(
-            f"<p style=\"margin:0;color:{palette['ink']}\">{body_html}</p>"
-        )
-        body_rect = card.adjusted(8, 27, -8, -7)
+        body = self._body_document(snippet, body_font)
+        body_rect = card.adjusted(8, 8, -8, 0)
+        body_rect.setBottom(footer.top() - 6)
         body.setTextWidth(body_rect.width())
         painter.setPen(QColor(palette["ink"]))
         painter.save()
@@ -992,6 +1021,8 @@ class MainWindow(QMainWindow):
         self.search_results.setAccessibleName("全书搜索结果")
         self.search_results.setProperty("translation_accessible", "搜索结果")
         self.search_results.setUniformItemSizes(False)
+        self.search_results.setLayoutMode(QListView.LayoutMode.Batched)
+        self.search_results.setBatchSize(24)
         self.search_results.setSpacing(4)
         self.search_results.setMouseTracking(True)
         self.search_result_model = _SearchResultModel(self, self.search_results)
