@@ -41,7 +41,7 @@ from quietreader.ui.icons import render_icon_pixmap, vector_icon
 from quietreader.ui.reader import PageView
 from quietreader.ui.settings import SettingsDialog
 from quietreader.ui.settings_page import SettingsPage
-from quietreader.ui.term_notes import TermHoverCard, TermNoteDialog
+from quietreader.ui.term_notes import ImportTermNotesDialog, TermHoverCard, TermNoteDialog
 from quietreader.ui.theme import colors, stylesheet
 from quietreader.ui.tokens import (
     COMPACT_BRAND_BREAKPOINT, CRUMB_MIN_WIDTH, NARROW_BREAKPOINT, TOPBAR_HEIGHT,
@@ -1262,6 +1262,15 @@ class MainWindow(QMainWindow):
             button.setProperty("translation_accessible", label)
             term_actions.addWidget(button)
         term_layout.addLayout(term_actions)
+        self.term_import_button = self._button("从其他书继承词条…", self.prompt_import_term_notes)
+        self.term_import_button.setObjectName("bookmarkAction")
+        self.term_import_button.setMinimumWidth(0)
+        self.term_import_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.term_import_button.setToolTip("从其他书继承词条")
+        self.term_import_button.setProperty("translation_tip", "从其他书继承词条")
+        self.term_import_button.setAccessibleName("从其他书继承词条")
+        self.term_import_button.setProperty("translation_accessible", "从其他书继承词条")
+        term_layout.addWidget(self.term_import_button)
         self._tab_terms = self.reading_tabs.addTab(term_panel, "词条", "term")
 
         self.book_info = BookInfoPanel()
@@ -1413,6 +1422,8 @@ class MainWindow(QMainWindow):
         self.moyu_strip.exit_requested.connect(self.exit_moyu_mode)
         self.moyu_strip.context_menu_opened.connect(self._on_moyu_menu_opened)
         self.moyu_strip.context_menu_closed.connect(self._on_moyu_menu_closed)
+        self.moyu_strip.term_hovered.connect(self._on_moyu_term_hovered)
+        self.moyu_strip.term_hover_cleared.connect(self._on_moyu_term_hover_cleared)
         reading.addWidget(self.moyu_strip, 1)
         self.moyu_strip.hide()
 
@@ -1580,6 +1591,7 @@ class MainWindow(QMainWindow):
         self.moyu_lines_shortcut.activated.connect(self.toggle_moyu_lines)
         self.toast = ToastNotice(self.surface)
         self.term_hover_card = TermHoverCard(self.surface)
+        self.moyu_term_hover_card = TermHoverCard(None, floating=True)
         self.appearance_popover = AppearancePopover(self.surface)
         self.appearance_popover.settings_changed.connect(self.apply_settings)
         self.appearance_popover.more_settings_requested.connect(lambda: self.show_settings(section="reading"))
@@ -3238,11 +3250,55 @@ class MainWindow(QMainWindow):
             self.term_hover_card.dismiss()
         self._sync_escape_shortcut()
 
+    def _on_moyu_term_hovered(self, record, global_anchor_rect):
+        if (
+            not self.moyu_mode
+            or not isinstance(record, dict)
+            or not isinstance(global_anchor_rect, QRect)
+            or not self.book
+            or self.closed
+            or self._window_hidden
+            or self._moyu_auto_hidden
+            or self._moyu_menu_open
+            or self._focus_adjust_active
+            or self.moyu_strip.interaction_active
+            or not hasattr(self, "moyu_term_hover_card")
+        ):
+            return
+        screen = (
+            QGuiApplication.screenAt(global_anchor_rect.center())
+            or self.screen()
+            or QGuiApplication.primaryScreen()
+        )
+        bounds = screen.availableGeometry() if screen is not None else None
+        strip_rect = self.frameGeometry()
+        card_anchor = QRect(
+            global_anchor_rect.left(),
+            min(global_anchor_rect.top(), strip_rect.top()),
+            global_anchor_rect.width(),
+            max(global_anchor_rect.bottom(), strip_rect.bottom()) - min(global_anchor_rect.top(), strip_rect.top()) + 1,
+        )
+        self.moyu_term_hover_card.show_for(
+            record.get("term", ""),
+            record.get("note", ""),
+            card_anchor,
+            bounds_rect=bounds,
+            prefer_above=True,
+        )
+
+    def _on_moyu_term_hover_cleared(self):
+        if hasattr(self, "moyu_term_hover_card"):
+            self.moyu_term_hover_card.dismiss()
+
     def _hide_term_hover(self):
         if hasattr(self, "reader"):
             self.reader.clear_term_hover()
+        if hasattr(self, "moyu_strip"):
+            self.moyu_strip.clear_term_hover()
         if hasattr(self, "term_hover_card"):
             self.term_hover_card.dismiss()
+        if hasattr(self, "moyu_term_hover_card"):
+            self.moyu_term_hover_card.dismiss()
         self._sync_escape_shortcut()
 
     def get_term_notes(self, book_id: str | None = None) -> list[dict]:
@@ -3250,6 +3306,11 @@ class MainWindow(QMainWindow):
         if not target_id:
             return []
         return list(self.store.state.get("term_notes", {}).get(target_id, []))
+
+    def _term_notes_read_only_warning(self) -> str:
+        if getattr(self.store, "term_notes_read_only", False) and getattr(self.store, "term_notes_warning", ""):
+            return self.store.term_notes_warning
+        return "保存数据来自不支持的版本。已保护原文件，本次不会保存更改。"
 
     def _refresh_term_notes(self, select_term: str | None = None):
         if not hasattr(self, "term_notes_list"):
@@ -3263,12 +3324,18 @@ class MainWindow(QMainWindow):
         if not self.book:
             if hasattr(self, "reader"):
                 self.reader.set_term_notes([])
+            if hasattr(self, "moyu_strip"):
+                self.moyu_strip.set_term_notes([])
             self.term_add_button.setEnabled(False)
             self.term_edit_button.setEnabled(False)
             self.term_remove_button.setEnabled(False)
+            if hasattr(self, "term_import_button"):
+                self.term_import_button.setEnabled(False)
             return
         records = self.store.state.get("term_notes", {}).get(self.book.id, [])
         self.reader.set_term_notes(records)
+        if hasattr(self, "moyu_strip"):
+            self.moyu_strip.set_term_notes(records)
         tip_hint = self.t("双击在全书搜索此词条")
         self.term_notes_list.ensurePolished()
         selected_row = -1
@@ -3284,6 +3351,8 @@ class MainWindow(QMainWindow):
                 selected_row = row_idx
         self._elide_term_note_items()
         self.term_add_button.setEnabled(True)
+        if hasattr(self, "term_import_button"):
+            self.term_import_button.setEnabled(True)
         self._filter_term_notes()
         if selected_row >= 0 and not self.term_notes_list.item(selected_row).isHidden():
             self.term_notes_list.setCurrentRow(selected_row)
@@ -3342,12 +3411,14 @@ class MainWindow(QMainWindow):
         self.term_add_button.setEnabled(has_book)
         self.term_edit_button.setEnabled(has_selection)
         self.term_remove_button.setEnabled(has_selection)
+        if hasattr(self, "term_import_button"):
+            self.term_import_button.setEnabled(has_book)
 
     def upsert_term_note(self, term: str, note: str, *, original_term: str | None = None) -> bool:
         if not self.book:
             return False
-        if self.store.read_only:
-            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+        if self.store.read_only or getattr(self.store, "term_notes_read_only", False):
+            self.set_status(self._term_notes_read_only_warning())
             return False
         clean_term = normalize_term_text(term)
         clean_note = normalize_term_note(note)
@@ -3368,22 +3439,21 @@ class MainWindow(QMainWindow):
             else None
         )
 
-        if orig_idx is not None:
+        if orig_key:
+            if orig_idx is None:
+                return False
             if existing_idx is not None and existing_idx != orig_idx:
-                records[existing_idx]["term"] = clean_term
-                records[existing_idx]["note"] = clean_note
-                records.pop(orig_idx)
-            else:
-                records[orig_idx]["term"] = clean_term
-                records[orig_idx]["note"] = clean_note
+                return False
+            records[orig_idx]["note"] = clean_note
+            clean_term = records[orig_idx]["term"]
             status_key = "已更新词条标注：{term}"
         elif existing_idx is not None:
             records[existing_idx]["term"] = clean_term
             records[existing_idx]["note"] = clean_note
             status_key = "已更新词条标注：{term}"
         else:
-            if sum(len(values) for values in all_records.values()) >= MAX_TERM_NOTES:
-                self.set_status("词条标注数量已达上限。")
+            if len(records) >= MAX_TERM_NOTES:
+                self.set_status("本书词条标注数量已达上限（{limit} 条）。", limit=MAX_TERM_NOTES)
                 return False
             record = asdict(TermNote(
                 term=clean_term,
@@ -3401,8 +3471,8 @@ class MainWindow(QMainWindow):
     def remove_term_note(self, term: str) -> bool:
         if not self.book:
             return False
-        if self.store.read_only:
-            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+        if self.store.read_only or getattr(self.store, "term_notes_read_only", False):
+            self.set_status(self._term_notes_read_only_warning())
             return False
         key = normalize_term_text(term).casefold()
         if not key:
@@ -3420,11 +3490,165 @@ class MainWindow(QMainWindow):
         self.schedule_save()
         return True
 
+    def books_with_term_notes(self, exclude_book_id: str | None = None) -> list[dict]:
+        all_notes = self.store.state.get("term_notes", {})
+        if not isinstance(all_notes, dict):
+            return []
+        exclude = exclude_book_id if exclude_book_id is not None else (self.book.id if self.book else "")
+        sources: list[dict] = []
+        seen_ids: set[str] = set()
+        for record in self.store.state.get("books", []):
+            if not isinstance(record, dict):
+                continue
+            book_id = record.get("id", "")
+            if not book_id or book_id == exclude or book_id in seen_ids:
+                continue
+            notes = all_notes.get(book_id)
+            if not notes:
+                continue
+            seen_ids.add(book_id)
+            sources.append({
+                "id": book_id,
+                "title": display_title_for_record(record),
+                "records": deepcopy(notes),
+            })
+        for book_id, notes in all_notes.items():
+            if not book_id or book_id == exclude or book_id in seen_ids or not notes:
+                continue
+            seen_ids.add(book_id)
+            sources.append({
+                "id": book_id,
+                "title": book_id,
+                "records": deepcopy(notes),
+            })
+        return sources
+
+    def import_term_notes_from_book(
+        self,
+        source_book_id: str,
+        selected_terms: list[str] | None = None,
+        *,
+        overwrite: bool = False,
+    ) -> dict:
+        summary = {"added": 0, "updated": 0, "skipped": 0, "limit_reached": False}
+        if not self.book or not source_book_id or source_book_id == self.book.id:
+            return summary
+        if self.store.read_only or getattr(self.store, "term_notes_read_only", False):
+            self.set_status(self._term_notes_read_only_warning())
+            return summary
+        all_records = self.store.state.setdefault("term_notes", {})
+        source_records = all_records.get(source_book_id) or []
+        if not source_records:
+            return summary
+        allowed_keys = (
+            {normalize_term_text(term).casefold() for term in selected_terms if normalize_term_text(term)}
+            if selected_terms is not None
+            else None
+        )
+        target_records = all_records.setdefault(self.book.id, [])
+        existing_by_key = {
+            item.get("term", "").casefold(): item
+            for item in target_records
+            if isinstance(item, dict) and item.get("term")
+        }
+        new_entries: list[dict] = []
+        timestamp = datetime.now(timezone.utc).isoformat()
+        for src in source_records:
+            if not isinstance(src, dict):
+                continue
+            term = normalize_term_text(src.get("term", ""))
+            note = normalize_term_note(src.get("note", ""))
+            if not term or not note:
+                continue
+            key = term.casefold()
+            if allowed_keys is not None and key not in allowed_keys:
+                continue
+            existing = existing_by_key.get(key)
+            if existing is not None:
+                if overwrite:
+                    existing["note"] = note
+                    summary["updated"] += 1
+                else:
+                    summary["skipped"] += 1
+                continue
+            if len(target_records) + len(new_entries) >= MAX_TERM_NOTES:
+                summary["limit_reached"] = True
+                continue
+            copied = asdict(TermNote(term=term, note=note, created=timestamp))
+            new_entries.append(copied)
+            existing_by_key[key] = copied
+            summary["added"] += 1
+
+        if new_entries:
+            target_records[:0] = new_entries
+        if not target_records:
+            all_records.pop(self.book.id, None)
+        if summary["added"] or summary["updated"]:
+            self._refresh_term_notes()
+            self.schedule_save()
+
+        added = summary["added"]
+        updated = summary["updated"]
+        skipped = summary["skipped"]
+        if summary["limit_reached"]:
+            if added and updated:
+                self.set_status(
+                    "已继承 {added} 条并覆盖 {updated} 条词条标注（已达单书 {limit} 条上限）。",
+                    added=added, updated=updated, limit=MAX_TERM_NOTES,
+                )
+            elif added:
+                self.set_status(
+                    "已继承 {added} 条词条标注（已达单书 {limit} 条上限）。",
+                    added=added, limit=MAX_TERM_NOTES,
+                )
+            elif updated:
+                self.set_status("已更新 {updated} 条同名词条标注。", updated=updated)
+            else:
+                self.set_status("本书词条已达上限（{limit} 条），未能新增词条。", limit=MAX_TERM_NOTES)
+        elif added and updated:
+            self.set_status("已继承 {added} 条词条标注，覆盖 {updated} 条同名词条。", added=added, updated=updated)
+        elif added and skipped:
+            self.set_status("已继承 {added} 条词条标注（跳过 {skipped} 条同名）。", added=added, skipped=skipped)
+        elif added:
+            self.set_status("已继承 {added} 条词条标注。", added=added)
+        elif updated:
+            self.set_status("已更新 {updated} 条同名词条标注。", updated=updated)
+        elif skipped:
+            self.set_status("所选词条已全部存在，未作修改。")
+        return summary
+
+    def prompt_import_term_notes(self):
+        if not self.book or self.moyu_mode:
+            return False
+        if self.store.read_only or getattr(self.store, "term_notes_read_only", False):
+            self.set_status(self._term_notes_read_only_warning())
+            return False
+        self._hide_term_hover()
+        sources = self.books_with_term_notes(exclude_book_id=self.book.id)
+        if not sources:
+            self.set_status("书架中暂无其他包含词条标注的书籍。")
+            return False
+        existing_terms = {item.get("term", "").casefold() for item in self.get_term_notes()}
+        dialog = ImportTermNotesDialog(
+            sources=sources,
+            existing_terms=existing_terms,
+            theme=self.settings.theme,
+            language=self.settings.language,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        source_id, selected_terms, overwrite = dialog.selection()
+        if not source_id or not selected_terms:
+            return False
+        result = self.import_term_notes_from_book(source_id, selected_terms, overwrite=overwrite)
+        return bool(result["added"] or result["updated"])
+
     def open_term_note_dialog(self, term: str = ""):
         if not self.book or self.moyu_mode:
             return False
-        if self.store.read_only:
-            self.set_status("保存数据来自不支持的版本。已保护原文件，本次不会保存更改。")
+        if self.store.read_only or getattr(self.store, "term_notes_read_only", False):
+            self.set_status(self._term_notes_read_only_warning())
             return False
         self._hide_term_hover()
         clean_term = normalize_term_text(term)
@@ -3447,9 +3671,9 @@ class MainWindow(QMainWindow):
             return self.remove_term_note(existing["term"])
         new_term, new_note = dialog.values()
         ok = self.upsert_term_note(
-            new_term,
+            existing["term"] if existing is not None else new_term,
             new_note,
-            original_term=existing["term"] if existing else None,
+            original_term=existing["term"] if existing is not None else None,
         )
         if ok and not self.focus_mode and not self.moyu_mode:
             self.reading_tabs.setCurrentIndex(self._tab_terms)
@@ -4028,6 +4252,7 @@ class MainWindow(QMainWindow):
 
     def _on_moyu_menu_opened(self):
         self._moyu_menu_open = True
+        self._hide_term_hover()
         self._moyu_hide_timer.stop()
 
     def _on_moyu_menu_closed(self):
@@ -4036,6 +4261,7 @@ class MainWindow(QMainWindow):
 
     def _hide_moyu_if_away(self):
         if self.moyu_mode and not self.moyu_strip.interaction_active and not self._moyu_pointer_is_near():
+            self._hide_term_hover()
             self._moyu_auto_hidden = True
             self.hide()
 
@@ -4086,6 +4312,7 @@ class MainWindow(QMainWindow):
     def exit_moyu_mode(self):
         if not self.moyu_mode:
             return
+        self._hide_term_hover()
         was_auto_hidden = self._moyu_auto_hidden
         return_to_focus = self._moyu_return_to_focus
         previous_geometry = QRect(self._moyu_geometry) if self._moyu_geometry is not None else None
@@ -4130,6 +4357,7 @@ class MainWindow(QMainWindow):
     def turn_moyu_sentence(self, direction):
         if not self.moyu_mode or not self.book or direction not in (-1, 1):
             return
+        self._hide_term_hover()
 
         if direction > 0:
             overflow_offset = self.moyu_strip.overflow_source_offset
@@ -4184,6 +4412,7 @@ class MainWindow(QMainWindow):
     def toggle_moyu_lines(self):
         if not self.moyu_mode:
             return
+        self._hide_term_hover()
         values = self.settings.to_dict()
         values["moyu_lines"] = 1 if self.settings.moyu_lines == 2 else 2
         self.apply_settings(Settings.from_dict(values))
@@ -4395,6 +4624,9 @@ class MainWindow(QMainWindow):
             resize_outline=self.focus_mode and not self.moyu_mode and self._focus_adjust_active,
             drop_highlight=self._drag_hover_active and not self.focus_mode,
         ))
+        if hasattr(self, "moyu_term_hover_card"):
+            moyu_card_alpha = round(opacity * 255) if self.moyu_mode else 255
+            self.moyu_term_hover_card.setStyleSheet(stylesheet(palette, moyu_card_alpha, borderless=True))
         if hasattr(self, "brand_mark"):
             self.brand_mark.setPixmap(
                 self.windowIcon().pixmap(QSize(22, 22), self.brand_mark.devicePixelRatioF())
@@ -4791,6 +5023,7 @@ class MainWindow(QMainWindow):
             self.reveal()
 
     def hide_or_minimize(self):
+        self._hide_term_hover()
         if self.moyu_mode:
             self._moyu_bar_geometry = QRect(self.geometry())
             self._moyu_hide_timer.stop()
@@ -4839,7 +5072,10 @@ class MainWindow(QMainWindow):
             self._update_jump_navigation()
         if hasattr(self, "toast") and not self.toast.isHidden():
             self.toast.reposition(self._toast_bottom_margin())
-        if hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden():
+        if (
+            (hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden())
+            or (hasattr(self, "moyu_term_hover_card") and not self.moyu_term_hover_card.isHidden())
+        ):
             self._hide_term_hover()
         if hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden():
             self.appearance_popover.reposition()
@@ -4913,7 +5149,10 @@ class MainWindow(QMainWindow):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        if hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden():
+        if (
+            (hasattr(self, "term_hover_card") and not self.term_hover_card.isHidden())
+            or (hasattr(self, "moyu_term_hover_card") and not self.moyu_term_hover_card.isHidden())
+        ):
             self._hide_term_hover()
         if hasattr(self, "save_timer"):
             self.schedule_save()
@@ -5177,6 +5416,8 @@ class MainWindow(QMainWindow):
             self.toast.dismiss()
         if hasattr(self, "term_hover_card"):
             self._hide_term_hover()
+        if hasattr(self, "moyu_term_hover_card"):
+            self.moyu_term_hover_card.close()
         if hasattr(self, "appearance_popover"):
             self.appearance_popover.dismiss()
         if hasattr(self, "focus_popover"):
@@ -5207,6 +5448,7 @@ class MainWindow(QMainWindow):
         self._moyu_visibility_timer.stop()
         self._moyu_hide_timer.stop()
         try:
+            self._hide_term_hover()
             self.hide()
             if self.tray:
                 self.tray.hide()

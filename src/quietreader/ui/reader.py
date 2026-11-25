@@ -1,17 +1,17 @@
 from bisect import bisect_left, bisect_right
-from dataclasses import asdict, is_dataclass
 import math
 import re
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSizeF, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout, QColor, QFont, QGuiApplication, QKeySequence,
-    QPainter, QPalette, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QImageReader,
+    QPainter, QPalette, QPen, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QImageReader,
 )
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from quietreader.domain.models import Settings
-from quietreader.persistence.store import MAX_TERM_TEXT, normalize_term_note, normalize_term_text
+from quietreader.persistence.store import MAX_TERM_TEXT
+from quietreader.ui.term_notes import compile_term_matcher, find_term_spans
 from quietreader.ui.theme import colors
 from quietreader.i18n import tr
 from quietreader.ui.wheel_navigation import WheelPageAccumulator
@@ -178,58 +178,14 @@ class PageView(QWidget):
     def set_term_notes(self, records):
         """Compile a single longest-first regex and precompute section term spans."""
         self.clear_term_hover()
-        cleaned = []
-        seen = set()
-        for raw in (records or ()):
-            item = asdict(raw) if is_dataclass(raw) else raw
-            if not isinstance(item, dict):
-                continue
-            term = normalize_term_text(item.get("term", ""))
-            note = normalize_term_note(item.get("note", ""))
-            if not term or not note:
-                continue
-            key = term.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            cleaned.append({
-                "term": term,
-                "note": note,
-                "created": str(item.get("created", ""))[:40],
-            })
-        ordered = sorted(cleaned, key=lambda r: len(r["term"]), reverse=True)
-        self._term_notes = ordered
-        self._term_lookup = {r["term"].casefold(): r for r in ordered}
-        if ordered:
-            self._term_pattern = re.compile(
-                "|".join(re.escape(r["term"]) for r in ordered),
-                re.IGNORECASE,
-            )
-        else:
-            self._term_pattern = None
+        self._term_notes, self._term_pattern, self._term_lookup = compile_term_matcher(records)
         self._rebuild_term_spans()
         self.update()
 
     def _rebuild_term_spans(self):
-        if not self.text or self._term_pattern is None:
-            self._term_spans = []
-            self._term_span_starts = []
-            return
-        spans: list[tuple[int, int, dict]] = []
-        starts: list[int] = []
-        lookup = self._term_lookup
-        for match in self._term_pattern.finditer(self.text):
-            matched_text = match.group(0)
-            record = lookup.get(matched_text.casefold()) or lookup.get(matched_text.lower())
-            if record is None:
-                continue
-            start = match.start()
-            end = match.end()
-            if end > start:
-                spans.append((start, end, record))
-                starts.append(start)
+        spans = find_term_spans(self.text, self._term_pattern, self._term_lookup)
         self._term_spans = spans
-        self._term_span_starts = starts
+        self._term_span_starts = [span[0] for span in spans]
 
     def clear_term_hover(self):
         had = self._hover_timer.isActive() or self._pending_hover is not None or self._active_hover is not None
@@ -582,27 +538,75 @@ class PageView(QWidget):
         self.clear_term_hover()
         self.turned.emit(direction)
 
-    def _term_char_format(self, palette: dict) -> QTextCharFormat:
+    def _term_underline_pen(self, palette: dict) -> QPen:
         is_dark_paper = QColor(palette["paper"]).lightness() < 128
-        term_fmt = QTextCharFormat()
-        term_fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.DotLine)
         if self.focus_mode:
             if palette.get("custom_background"):
-                term_underline = QColor(palette["ink"])
-                term_underline.setAlpha(95 if is_dark_paper else 85)
+                color = QColor(palette["ink"])
+                color.setAlpha(190 if is_dark_paper else 180)
             else:
-                term_underline = QColor(palette["accent"])
-                term_underline.setAlpha(135 if is_dark_paper else 125)
-            term_fmt.setUnderlineColor(term_underline)
-            return term_fmt
-        accent_color = QColor(palette["accent"])
-        term_wash = QColor(accent_color)
-        term_wash.setAlpha(26 if is_dark_paper else 22)
-        term_underline = QColor(accent_color)
-        term_underline.setAlpha(205 if is_dark_paper else 190)
-        term_fmt.setUnderlineColor(term_underline)
-        term_fmt.setBackground(term_wash)
-        return term_fmt
+                color = QColor(palette["accent"])
+                color.setAlpha(220 if is_dark_paper else 210)
+        else:
+            color = QColor(palette["accent"])
+            color.setAlpha(238 if is_dark_paper else 230)
+        width = max(1.6, round(self.settings.font_size * 0.085, 1))
+        pen = QPen(color, width, Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([3.0, 2.2])
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        return pen
+
+    def _draw_term_underlines(self, painter: QPainter, palette: dict, win_start: int, win_end: int):
+        if not self._term_spans:
+            return
+        first_term = max(0, bisect_right(self._term_span_starts, win_start) - 1)
+        doc_layout = self.document.documentLayout()
+        page_top = self.page * self.page_height
+        page_bottom = page_top + self.page_height
+        painter.save()
+        painter.setPen(self._term_underline_pen(palette))
+        for idx in range(first_term, len(self._term_spans)):
+            t_start, t_end, _record = self._term_spans[idx]
+            if t_start > win_end:
+                break
+            if t_end <= t_start or t_end <= win_start:
+                continue
+            q_start = self._offset_map.to_qt(t_start)
+            q_end = self._offset_map.to_qt(t_end)
+            if q_end <= q_start:
+                continue
+            block = self.document.findBlock(q_start)
+            while block.isValid() and block.position() < q_end:
+                block_pos = block.position()
+                block_text_len = max(0, block.length() - 1)
+                local_start = max(0, q_start - block_pos)
+                local_end = min(block_text_len, q_end - block_pos)
+                if local_end > local_start:
+                    block_rect = doc_layout.blockBoundingRect(block)
+                    text_layout = block.layout()
+                    for line_idx in range(text_layout.lineCount()):
+                        line = text_layout.lineAt(line_idx)
+                        line_start = line.textStart()
+                        line_end = line_start + line.textLength()
+                        ov_start = max(local_start, line_start)
+                        ov_end = min(local_end, line_end)
+                        if ov_end <= ov_start:
+                            continue
+                        line_top = block_rect.top() + line.y()
+                        line_h = line.height()
+                        if line_top + line_h <= page_top or line_top >= page_bottom:
+                            continue
+                        x1 = line.cursorToX(ov_start)[0]
+                        x2 = line.cursorToX(ov_end)[0]
+                        left, right = (x1, x2) if x1 <= x2 else (x2, x1)
+                        if right - left < 1.0:
+                            continue
+                        baseline_y = line_top + line.ascent()
+                        descent = line.descent()
+                        underline_y = min(line_top + line_h - 1.5, baseline_y + max(4.0, descent + 2.0))
+                        painter.drawLine(QPointF(left, underline_y), QPointF(right, underline_y))
+                block = block.next()
+        painter.restore()
 
     def wheelEvent(self, event):
         self._wheel_page_accumulator.handle(event)
@@ -643,22 +647,6 @@ class PageView(QWidget):
             else len(self.text)
         )
         paper_hex = c.get("paper", "").lower()
-        if self._term_spans:
-            first_term = max(0, bisect_right(self._term_span_starts, win_start) - 1)
-            term_fmt = self._term_char_format(c)
-            for idx in range(first_term, len(self._term_spans)):
-                t_start, t_end, _record = self._term_spans[idx]
-                if t_start > win_end:
-                    break
-                if t_end <= t_start or t_end <= win_start:
-                    continue
-                cur = QTextCursor(self.document)
-                cur.setPosition(self._offset_map.to_qt(t_start))
-                cur.setPosition(self._offset_map.to_qt(t_end), QTextCursor.MoveMode.KeepAnchor)
-                sel = QAbstractTextDocumentLayout.Selection()
-                sel.cursor = cur
-                sel.format = term_fmt
-                selections.append(sel)
         if not self.focus_mode and self.search_matches:
             first_idx = max(0, bisect_right(self._search_match_starts, win_start) - 1)
             passive_bg = QColor(
@@ -695,6 +683,8 @@ class PageView(QWidget):
         if selections:
             context.selections = selections
         self.document.documentLayout().draw(painter, context)
+        if self._term_spans:
+            self._draw_term_underlines(painter, c, win_start, win_end)
 
     def _hit(self, point):
         p = QPointF(point.x() - self.settings.padding, point.y() - self.settings.padding + self.page * self.page_height)

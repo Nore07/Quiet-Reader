@@ -13,6 +13,7 @@ from quietreader.library.shelf import BOOKSHELF_DIR, SUPPORTED_SUFFIXES, UNCLASS
 LEGACY_BOOKSHELF_DIR = "书架"
 LEGACY_UNCLASSIFIED_DIR = "未分类"
 STATE_FILES = ("state.json", "state.backup.json")
+TERM_NOTES_FILES = ("term_notes.json", "term_notes.backup.json")
 
 
 def application_root() -> Path:
@@ -39,7 +40,10 @@ def legacy_migration_needed(legacy_directory: Path, destination: Path) -> bool:
     except OSError:
         return False
 
-    has_state = any((legacy / name).is_file() and not (legacy / name).is_symlink() for name in STATE_FILES)
+    has_state = any(
+        (legacy / name).is_file() and not (legacy / name).is_symlink()
+        for name in (*STATE_FILES, *TERM_NOTES_FILES)
+    )
     old_bookshelf = legacy / LEGACY_BOOKSHELF_DIR
     has_bookshelf = old_bookshelf.is_dir() and not old_bookshelf.is_symlink()
     return legacy.is_dir() and (has_state or has_bookshelf)
@@ -81,18 +85,18 @@ def _rewrite_state_paths(
     staged_bookshelf: Path,
     final_bookshelf: Path,
     category_names: dict[str, str],
-) -> None:
+) -> dict[str, str]:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, RecursionError):
-        return
+        return {}
     if not isinstance(state, dict):
-        return
+        return {}
 
     try:
         old_root = old_bookshelf.resolve()
     except OSError:
-        return
+        return {}
 
     id_map: dict[str, str] = {}
     books = state.get("books")
@@ -130,6 +134,24 @@ def _rewrite_state_paths(
         state["last_book"] = id_map.get(state["last_book"], state["last_book"])
 
     path.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return id_map
+
+
+def _rewrite_term_notes_paths(path: Path, id_map: dict[str, str]) -> None:
+    if not id_map:
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, RecursionError):
+        return
+    if not isinstance(payload, dict) or not isinstance(payload.get("term_notes"), dict):
+        return
+    remapped = {}
+    for book_id, value in payload["term_notes"].items():
+        target_id = id_map.get(book_id, book_id)
+        remapped.setdefault(target_id, value)
+    payload["term_notes"] = remapped
+    path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
 def migrate_legacy_data(legacy_directory: Path, destination: Path) -> bool:
@@ -144,7 +166,7 @@ def migrate_legacy_data(legacy_directory: Path, destination: Path) -> bool:
         staged = Path(temporary) / "data"
         staged.mkdir()
 
-        for name in STATE_FILES:
+        for name in (*STATE_FILES, *TERM_NOTES_FILES):
             source = legacy / name
             if source.is_file() and not source.is_symlink():
                 shutil.copy2(source, staged / name)
@@ -153,10 +175,20 @@ def migrate_legacy_data(legacy_directory: Path, destination: Path) -> bool:
         category_names = _copy_bookshelf(old_bookshelf, staged)
         new_bookshelf = staged / BOOKSHELF_DIR
         if category_names:
+            combined_id_map: dict[str, str] = {}
             for name in STATE_FILES:
                 state_file = staged / name
                 if state_file.is_file():
-                    _rewrite_state_paths(state_file, old_bookshelf, new_bookshelf, target / BOOKSHELF_DIR, category_names)
+                    rewritten = _rewrite_state_paths(
+                        state_file, old_bookshelf, new_bookshelf, target / BOOKSHELF_DIR, category_names,
+                    )
+                    for old_id, new_id in rewritten.items():
+                        combined_id_map.setdefault(old_id, new_id)
+            if combined_id_map:
+                for name in TERM_NOTES_FILES:
+                    notes_file = staged / name
+                    if notes_file.is_file():
+                        _rewrite_term_notes_paths(notes_file, combined_id_map)
 
         if target.exists():
             if target.is_symlink() or not target.is_dir():

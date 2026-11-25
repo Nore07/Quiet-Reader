@@ -345,6 +345,13 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     QListWidget::item:selected {{ background: {c['selected']}; color: {c['ink']}; }}
     QListWidget::item:hover {{ background: {accent_hover}; }}
     QListWidget#termNotesList::item {{ padding: 7px 8px; border-radius: 6px; }}
+    QListWidget#importTermList {{
+        background: {elevated};
+        border: 1px solid {c['line']};
+        border-radius: 8px;
+        padding: 4px;
+    }}
+    QListWidget#importTermList::item {{ padding: 7px 8px; border-radius: 6px; }}
     QListWidget#shelfList {{
         background: transparent;
         border: none;
@@ -539,6 +546,12 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     }}
     QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QFontComboBox:hover, QLineEdit:hover, QPlainTextEdit:hover {{ border-color: {line_strong}; }}
     QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QFontComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{ border-color: {c['accent']}; }}
+    QLineEdit:read-only {{
+        background: {c['side']};
+        color: {c['muted']};
+        border-color: {c['line']};
+    }}
+    QLineEdit:read-only:hover, QLineEdit:read-only:focus {{ border-color: {c['line']}; }}
     QPushButton#dangerAction {{
         color: {danger};
         background: transparent;
@@ -571,7 +584,22 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         background: transparent;
         font-size: 12px;
     }}
-    QCheckBox {{ padding: 5px 0; }}
+    QCheckBox, QRadioButton {{ color: {c['ink']}; padding: 4px 0; spacing: 7px; }}
+    QRadioButton::indicator {{
+        width: 14px;
+        height: 14px;
+        border-radius: 8px;
+        border: 1.5px solid {line_strong};
+        background: {elevated};
+    }}
+    QRadioButton::indicator:hover {{ border-color: {c['accent']}; }}
+    QRadioButton::indicator:checked {{
+        width: 8px;
+        height: 8px;
+        border-radius: 8px;
+        border: 4px solid {c['accent']};
+        background: {on_accent};
+    }}
     QToolTip {{ background: {elevated}; color: {c['ink']}; border: 1px solid {line_strong}; border-radius: 6px; padding: 4px 8px; }}
     QMenu {{ background: {elevated}; color: {c['ink']}; border: 1px solid {line_strong}; border-radius: 8px; padding: 5px; }}
     QMenu::item {{ color: {c['ink']}; background: transparent; padding: 7px 24px 7px 10px; border-radius: 5px; }}
