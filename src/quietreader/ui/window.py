@@ -1268,17 +1268,12 @@ class MainWindow(QMainWindow):
         self._themed_controls.append(self.progress)
         reading.addWidget(self.progress)
 
-        # Keep chapter status visible and move jump destinations to a second row
-        # when a narrow window cannot fit the complete footer on one line.
+        # Compact footer keeps chapter status and jump-back action on one line.
         self.reader_navigation = QWidget()
         self.reader_navigation.setObjectName("readerNavigation")
-        self.reader_navigation_layout = QVBoxLayout(self.reader_navigation)
-        self.reader_navigation_layout.setContentsMargins(4, 0, 4, 2)
-        self.reader_navigation_layout.setSpacing(0)
-        self.reader_navigation_main = QWidget(self.reader_navigation)
-        self.reader_navigation_main_layout = QHBoxLayout(self.reader_navigation_main)
-        navigation = self.reader_navigation_main_layout
-        navigation.setContentsMargins(0, 0, 0, 0)
+        self.reader_navigation_layout = QHBoxLayout(self.reader_navigation)
+        navigation = self.reader_navigation_layout
+        navigation.setContentsMargins(4, 0, 4, 2)
         navigation.setSpacing(4)
         self.page_label = self._label("PageUp / PageDown", "pageStatus")
         self.page_label.setMinimumWidth(0)
@@ -1286,20 +1281,7 @@ class MainWindow(QMainWindow):
         self.page_label.setProperty("full_text", "PageUp / PageDown")
         self.page_label.setProperty("compact_text", "Pg")
 
-        self.jump_controls_widget = QWidget(self.reader_navigation)
-        self.jump_controls_layout = QHBoxLayout(self.jump_controls_widget)
-        self.jump_controls_layout.setContentsMargins(0, 0, 0, 0)
-        self.jump_controls_layout.setSpacing(4)
-        self.jump_back_control = QWidget(self.jump_controls_widget)
-        self.jump_back_control_layout = QHBoxLayout(self.jump_back_control)
-        self.jump_back_control_layout.setContentsMargins(0, 0, 0, 0)
-        self.jump_back_control_layout.setSpacing(2)
-        self.jump_forward_control = QWidget(self.jump_controls_widget)
-        self.jump_forward_control_layout = QHBoxLayout(self.jump_forward_control)
-        self.jump_forward_control_layout.setContentsMargins(0, 0, 0, 0)
-        self.jump_forward_control_layout.setSpacing(2)
-
-        self.jump_back_button = QPushButton("↶", self.jump_back_control)
+        self.jump_back_button = QPushButton("↶", self.reader_navigation)
         self.jump_back_button.setObjectName("jumpBackButton")
         self.jump_back_button.setProperty("translation_source", "↶")
         self.jump_back_button.setToolTip("返回上一处阅读位置 (Alt+Left)")
@@ -1311,12 +1293,12 @@ class MainWindow(QMainWindow):
         self.jump_back_button.setFixedSize(22, 20)
         self.jump_back_button.clicked.connect(self.jump_back)
         self.jump_back_button.hide()
-        self.jump_back_label = _JumpTargetLabel(self.jump_back_control)
+        self.jump_back_label = _JumpTargetLabel(self.reader_navigation)
         self.jump_back_label.setObjectName("jumpTargetLabel")
         self.jump_back_label.setMaximumWidth(132)
         self.jump_back_label.hide()
 
-        self.jump_forward_button = QPushButton("↷", self.jump_forward_control)
+        self.jump_forward_button = QPushButton("↷", self.reader_navigation)
         self.jump_forward_button.setObjectName("jumpForwardButton")
         self.jump_forward_button.setProperty("translation_source", "↷")
         self.jump_forward_button.setToolTip("跳回刚才的位置 (Alt+Right)")
@@ -1328,19 +1310,10 @@ class MainWindow(QMainWindow):
         self.jump_forward_button.setFixedSize(22, 20)
         self.jump_forward_button.clicked.connect(self.jump_forward)
         self.jump_forward_button.hide()
-        self.jump_forward_label = _JumpTargetLabel(self.jump_forward_control)
+        self.jump_forward_label = _JumpTargetLabel(self.reader_navigation)
         self.jump_forward_label.setObjectName("jumpTargetLabel")
         self.jump_forward_label.setMaximumWidth(132)
         self.jump_forward_label.hide()
-        self.jump_back_control_layout.addWidget(self.jump_back_button)
-        self.jump_back_control_layout.addWidget(self.jump_back_label, 1)
-        self.jump_forward_control_layout.addWidget(self.jump_forward_button)
-        self.jump_forward_control_layout.addWidget(self.jump_forward_label, 1)
-        self.jump_controls_layout.addWidget(self.jump_back_control, 1)
-        self.jump_controls_layout.addWidget(self.jump_forward_control, 1)
-        self.jump_controls_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._jump_controls_overflow = False
-
         self.previous_chapter = self._icon_button("prev_chapter", lambda: self.turn_chapter(-1), "上一章", size=13, fixed_size=(24, 22))
         self.previous = self._icon_button("prev_page", lambda: self.turn_page(-1), "← 上一页", size=13, fixed_size=(24, 22))
         self.next = self._icon_button("next_page", lambda: self.turn_page(1), "下一页 →", size=13, fixed_size=(24, 22))
@@ -1349,7 +1322,10 @@ class MainWindow(QMainWindow):
         self.footer_book_progress.setObjectName("pageStatus")
         self.footer_book_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         navigation.addWidget(self.page_label)
-        navigation.addWidget(self.jump_controls_widget)
+        navigation.addWidget(self.jump_back_button)
+        navigation.addWidget(self.jump_back_label)
+        navigation.addWidget(self.jump_forward_button)
+        navigation.addWidget(self.jump_forward_label)
         navigation.addStretch(1)
         navigation.addWidget(self.previous_chapter)
         navigation.addWidget(self.previous)
@@ -1357,14 +1333,6 @@ class MainWindow(QMainWindow):
         navigation.addWidget(self.next_chapter)
         navigation.addStretch(1)
         navigation.addWidget(self.footer_book_progress)
-        self.reader_navigation_layout.addWidget(self.reader_navigation_main)
-        self.jump_overflow_row = QWidget(self.reader_navigation)
-        self.jump_overflow_layout = QHBoxLayout(self.jump_overflow_row)
-        self.jump_overflow_layout.setContentsMargins(0, 0, 0, 0)
-        self.jump_overflow_layout.setSpacing(4)
-        self.jump_overflow_layout.addStretch(1)
-        self.jump_overflow_row.hide()
-        self.reader_navigation_layout.addWidget(self.jump_overflow_row)
         reading.addWidget(self.reader_navigation)
         self.main_pages.addWidget(self.reader_page)
         self.shelf = ShelfPanel()
@@ -2875,7 +2843,7 @@ class MainWindow(QMainWindow):
 
             self.page_label.setProperty("translation_source", None)
             full_label = tr("{page} / {pages} 页 · 本章 {progress}", self.settings.language, page=self.reader.page + 1, pages=self.reader.page_count, progress=f"{chapter_fraction:.0%}")
-            compact_label = f"{self.reader.page + 1}/{self.reader.page_count}"
+            compact_label = f"{self.reader.page + 1}/{self.reader.page_count} · 本章{chapter_fraction:.0%}"
             self.page_label.setProperty("full_text", full_label)
             self.page_label.setProperty("compact_text", compact_label)
             self.page_label.setToolTip(full_label)
@@ -3708,23 +3676,6 @@ class MainWindow(QMainWindow):
                 self.focus_popover.dismiss()
         self.schedule_save()
 
-    def _set_jump_controls_overflow(self, overflow):
-        overflow = bool(overflow)
-        if overflow == self._jump_controls_overflow:
-            self.jump_overflow_row.setVisible(overflow)
-            return
-
-        if overflow:
-            self.reader_navigation_main_layout.removeWidget(self.jump_controls_widget)
-            self.jump_overflow_layout.insertWidget(0, self.jump_controls_widget, 1)
-        else:
-            self.jump_overflow_layout.removeWidget(self.jump_controls_widget)
-            self.reader_navigation_main_layout.insertWidget(1, self.jump_controls_widget)
-        self._jump_controls_overflow = overflow
-        self.jump_overflow_row.setVisible(overflow)
-        self.reader_navigation_main.updateGeometry()
-        self.jump_overflow_row.updateGeometry()
-
     def _sync_reader_navigation_labels(self):
         if not hasattr(self, "reader_navigation"):
             return
@@ -3743,51 +3694,22 @@ class MainWindow(QMainWindow):
         compact_page_label = self.page_label.property("compact_text") or "Pg"
         self.page_label.setText(full_page_label)
         self.page_label.setToolTip(full_page_label)
-        back_visible = not self.jump_back_button.isHidden()
-        forward_visible = not self.jump_forward_button.isHidden()
-        has_targets = back_visible or forward_visible
-        # A jump adds its history controls, but must not squeeze away the
-        # current chapter and page status that explains where the reader is.
-        self.page_label.setMinimumWidth(self.page_label.sizeHint().width() if has_targets else 0)
-        self.jump_back_control.setVisible(back_visible)
-        self.jump_forward_control.setVisible(forward_visible)
-        self.jump_controls_widget.setVisible(has_targets)
-
+        footer_w = self.footer_book_progress.sizeHint().width() if hasattr(self, "footer_book_progress") else 0
         target_controls_width = 0
-        visible_target_count = 0
-        for visible, button, label, control_layout in (
-            (back_visible, self.jump_back_button, self.jump_back_label, self.jump_back_control_layout),
-            (forward_visible, self.jump_forward_button, self.jump_forward_label, self.jump_forward_control_layout),
+        for widget in (
+            self.jump_back_button, self.jump_back_label,
+            self.jump_forward_button, self.jump_forward_label,
         ):
-            if not visible:
+            if widget.isHidden():
                 continue
-            visible_target_count += 1
-            target_controls_width += button.sizeHint().width() + label.maximumWidth() + control_layout.spacing()
-        if visible_target_count > 1:
-            target_controls_width += self.jump_controls_layout.spacing() * (visible_target_count - 1)
-
-        page_navigation_width = sum(
-            button.sizeHint().width()
-            for button in (self.previous_chapter, self.previous, self.next, self.next_chapter)
-        )
-        footer_width = self.footer_book_progress.sizeHint().width()
-        visible_main_items = 1 + 4 + 1 + 2 + (1 if has_targets else 0)
-        spacing_width = self.reader_navigation_main_layout.spacing() * max(0, visible_main_items - 1)
-        full_width = (
-            self.page_label.sizeHint().width()
-            + page_navigation_width
-            + footer_width
-            + target_controls_width
-            + spacing_width
-        )
-        needs_overflow = has_targets and self.reader_navigation_main.width() < full_width
-        self._set_jump_controls_overflow(needs_overflow)
-
-        for button in (self.previous_chapter, self.next_chapter):
-            button.setVisible(not needs_overflow)
-        self.footer_book_progress.setVisible(not needs_overflow)
-
-        compact = not has_targets and self.reader_navigation_main.width() < full_width
+            width = (
+                widget.maximumWidth()
+                if isinstance(widget, _JumpTargetLabel)
+                else widget.sizeHint().width()
+            )
+            target_controls_width += width + 4
+        full_width = self.page_label.sizeHint().width() + footer_w + 132 + target_controls_width
+        compact = self.reader_navigation.width() < full_width
         if compact:
             self.page_label.setText(compact_page_label)
         self.reader_navigation.setProperty("compact", compact)
