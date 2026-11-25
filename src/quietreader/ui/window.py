@@ -14,10 +14,10 @@ from time import time
 
 from PySide6.QtCore import (
     QAbstractListModel, QEvent, QItemSelectionModel, QModelIndex, QObject, QPoint,
-    QRunnable, QSize, QThreadPool, Qt, QTimer, QUrl, Signal,
+    QRunnable, QRect, QSize, QThreadPool, Qt, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
-    QAction, QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication,
+    QAction, QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QGuiApplication,
     QIcon, QKeySequence, QPainter, QShortcut, QTextDocument,
 )
 from PySide6.QtWidgets import (
@@ -48,6 +48,7 @@ from quietreader.ui.tokens import (
 from quietreader.i18n import tr, install_qt_translator, resolve_language
 from quietreader.ui.layout_panel import LayoutPanel
 from quietreader.ui.book_info import BookInfoPanel
+from quietreader.ui.moyu_strip import MoyuStrip, sentence_index_for_offset, sentence_spans
 from quietreader.ui.file_dialog import BookFileDialog, default_book_directory
 from quietreader.ui.toast import ToastNotice
 from quietreader.persistence.store import (
@@ -755,6 +756,20 @@ class MainWindow(QMainWindow):
         self.closed = False
         self._window_hidden = False
         self.focus_mode = False
+        self.moyu_mode = False
+        self._moyu_return_to_focus = False
+        self._moyu_geometry = None
+        self._moyu_bar_geometry = None
+        self._moyu_previous_maximum_size = None
+        self._moyu_was_maximized = False
+        self._moyu_sentences = []
+        self._moyu_sentence_index = -1
+        self._moyu_offset = 0
+        self._moyu_fragment_history = []
+        self._moyu_preserve_external_focus = False
+        self._moyu_auto_hidden = False
+        self._moyu_auto_hide_armed = False
+        self._moyu_menu_open = False
         self.sidebar_collapsed = False
         self._user_sidebar_collapsed = False
         self._was_narrow = False
@@ -795,6 +810,7 @@ class MainWindow(QMainWindow):
         self.tray = None
         self.hotkey = None
         self.emergency_hotkey = None
+        self.moyu_hotkeys = []
         self._shortcut_capture_active = False
         self.worker = None
         self.pool = QThreadPool(self)
@@ -824,6 +840,14 @@ class MainWindow(QMainWindow):
         self._focus_resample_timer.setSingleShot(True)
         self._focus_resample_timer.setInterval(140)
         self._focus_resample_timer.timeout.connect(self._run_scheduled_focus_resample)
+        self._focus_resample_pending = False
+        self._moyu_visibility_timer = QTimer(self)
+        self._moyu_visibility_timer.setInterval(80)
+        self._moyu_visibility_timer.timeout.connect(self._sync_moyu_visibility)
+        self._moyu_hide_timer = QTimer(self)
+        self._moyu_hide_timer.setSingleShot(True)
+        self._moyu_hide_timer.setInterval(240)
+        self._moyu_hide_timer.timeout.connect(self._hide_moyu_if_away)
         self._focus_picker = DesktopColorPicker(self)
         self._focus_picker.selected.connect(self._on_focus_eyedropper_selected)
         self._focus_picker.failed.connect(self.set_status)
@@ -988,7 +1012,7 @@ class MainWindow(QMainWindow):
         self.pin_button = self._icon_button("pin", self.toggle_pin, "置顶", size=15, checkable=True)
         self.topbar_actions_layout.addWidget(self.pin_button)
 
-        self.focus_button = self._icon_button("focus", self.show_focus_panel, "专注", size=15, checkable=True)
+        self.focus_button = self._icon_button("fish", self.show_focus_panel, "专注", size=20, checkable=True)
         self.topbar_actions_layout.addWidget(self.focus_button)
 
         self.config_button = self._icon_button("settings", self.toggle_settings, "配置", size=15, checkable=True)
@@ -1260,6 +1284,15 @@ class MainWindow(QMainWindow):
         self.reader.reflowed.connect(self._on_reader_reflowed)
         reading.addWidget(self.reader, 1)
 
+        self.moyu_strip = MoyuStrip(self.reader_page)
+        self.moyu_strip.turn_requested.connect(self.turn_moyu_sentence)
+        self.moyu_strip.toggle_lines_requested.connect(self.toggle_moyu_lines)
+        self.moyu_strip.exit_requested.connect(self.exit_moyu_mode)
+        self.moyu_strip.context_menu_opened.connect(self._on_moyu_menu_opened)
+        self.moyu_strip.context_menu_closed.connect(self._on_moyu_menu_closed)
+        reading.addWidget(self.moyu_strip, 1)
+        self.moyu_strip.hide()
+
         self.progress = ThinSlider(Qt.Orientation.Horizontal)
         self.progress.setRange(0, 1000)
         self.progress.setAccessibleName("本章阅读进度")
@@ -1416,6 +1449,12 @@ class MainWindow(QMainWindow):
         self.emergency_shortcut = QShortcut(QKeySequence(self.settings.emergency_key), self)
         self.emergency_shortcut.setAutoRepeat(False)
         self.emergency_shortcut.activated.connect(self.emergency_exit)
+        self.moyu_shortcut = QShortcut(QKeySequence(self.settings.moyu_key), self)
+        self.moyu_shortcut.setAutoRepeat(False)
+        self.moyu_shortcut.activated.connect(self.toggle_moyu_mode)
+        self.moyu_lines_shortcut = QShortcut(QKeySequence(self.settings.moyu_lines_key), self)
+        self.moyu_lines_shortcut.setAutoRepeat(False)
+        self.moyu_lines_shortcut.activated.connect(self.toggle_moyu_lines)
         self.toast = ToastNotice(self.surface)
         self.appearance_popover = AppearancePopover(self.surface)
         self.appearance_popover.settings_changed.connect(self.apply_settings)
@@ -1424,6 +1463,7 @@ class MainWindow(QMainWindow):
         self.focus_popover = FocusPopover(self.surface)
         self.focus_popover.settings_changed.connect(self.apply_settings)
         self.focus_popover.enter_focus_requested.connect(self.toggle_focus)
+        self.focus_popover.enter_moyu_requested.connect(self.toggle_moyu_mode)
         self.focus_popover.resample_requested.connect(self.manual_resample_focus_background)
         self.focus_popover.eyedropper_requested.connect(self._focus_picker.begin)
         self.focus_popover.more_settings_requested.connect(lambda: self.show_settings(section="focus"))
@@ -1436,6 +1476,12 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         self.hotkey = GlobalHotkey(app, self.toggle_visible)
         self.emergency_hotkey = GlobalHotkey(app, self.emergency_exit, identifier=0x5153)
+        self.moyu_hotkeys = [
+            GlobalHotkey(app, self.toggle_moyu_mode, identifier=0x5154),
+            GlobalHotkey(app, lambda: self.turn_moyu_sentence(-1), identifier=0x5155),
+            GlobalHotkey(app, lambda: self.turn_moyu_sentence(1), identifier=0x5156),
+            GlobalHotkey(app, self.toggle_moyu_lines, identifier=0x5157),
+        ]
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(self.windowIcon(), self)
             self.tray.setToolTip("QuietReader · 静读")
@@ -1451,6 +1497,11 @@ class MainWindow(QMainWindow):
             self.tray_focus_action.triggered.connect(self.toggle_focus)
             self.tray_focus_action.setEnabled(False)
             menu.addAction(self.tray_focus_action)
+            self.tray_moyu_action = QAction("进入摸鱼模式", self)
+            self.tray_moyu_action.setCheckable(True)
+            self.tray_moyu_action.triggered.connect(self.toggle_moyu_mode)
+            self.tray_moyu_action.setEnabled(False)
+            menu.addAction(self.tray_moyu_action)
             action = QAction("退出 QuietReader", self)
             action.setProperty("translation_source", "退出 QuietReader")
             action.triggered.connect(self.quit_app)
@@ -2141,6 +2192,8 @@ class MainWindow(QMainWindow):
         self._update_header_crumb()
         self._select_toc_target(index, offset)
         self.reader.set_text(section.text, offset, section.images, section.links, section.formats)
+        if self.moyu_mode:
+            self._refresh_moyu_sentence(offset)
         self._sync_reader_search_highlights()
         self._update_progress()
         self.schedule_save()
@@ -2806,7 +2859,9 @@ class MainWindow(QMainWindow):
                 sampled_complex=self._sampled_focus_complex,
             )
         if hasattr(self, "tray_focus_action"):
-            self.tray_focus_action.setEnabled(ready)
+            self.tray_focus_action.setEnabled(ready and not self.moyu_mode)
+        if hasattr(self, "tray_moyu_action"):
+            self.tray_moyu_action.setEnabled(ready)
         if ready:
             identity = self._chapter_identity(self.book.sections[self.section_index])
             chapter_start = self.section_index
@@ -3214,6 +3269,8 @@ class MainWindow(QMainWindow):
         return self.settings.language
 
     def _effective_focus_background(self) -> str:
+        if self.moyu_mode and self._sampled_focus_color:
+            return self._sampled_focus_color
         if self.settings.focus_auto_background and self._sampled_focus_color:
             return self._sampled_focus_color
         return self.settings.background_color
@@ -3222,7 +3279,7 @@ class MainWindow(QMainWindow):
         if self._focus_opacity_override is not None:
             return self._focus_opacity_override
         opacity = self.settings.opacity
-        if self.settings.focus_auto_background and self._sampled_focus_complex:
+        if (self.moyu_mode or self.settings.focus_auto_background) and self._sampled_focus_complex:
             return min(opacity, self.settings.focus_complex_opacity)
         return opacity
 
@@ -3249,7 +3306,7 @@ class MainWindow(QMainWindow):
             self.apply_settings(replace(self.settings, focus_auto_background=True))
         else:
             self._apply_window_style()
-            if self.focus_mode and changed:
+            if self.focus_mode and not self.moyu_mode and changed:
                 self.reader.reflow()
         if notify:
             if sample.is_complex:
@@ -3270,8 +3327,13 @@ class MainWindow(QMainWindow):
     def _schedule_auto_focus_resample(self, delay_ms: int = 140):
         if (
             not self.focus_mode
-            or not self.settings.focus_auto_background
-            or self.settings.focus_sample_trigger != "auto"
+            or (
+                not self.moyu_mode
+                and (
+                    not self.settings.focus_auto_background
+                    or self.settings.focus_sample_trigger != "auto"
+                )
+            )
             or self.closed
             or self._window_hidden
         ):
@@ -3281,13 +3343,21 @@ class MainWindow(QMainWindow):
     def _run_scheduled_focus_resample(self):
         if (
             not self.focus_mode
-            or self._focus_adjust_active
-            or not self.settings.focus_auto_background
-            or self.settings.focus_sample_trigger != "auto"
+            or (
+                not self.moyu_mode
+                and (
+                    not self.settings.focus_auto_background
+                    or self.settings.focus_sample_trigger != "auto"
+                )
+            )
             or self.closed
             or self._window_hidden
         ):
             return
+        if self._focus_adjust_active:
+            self._focus_resample_pending = True
+            return
+        self._focus_resample_pending = False
         self.resample_focus_background(notify=False, force_enable=False)
 
     def show_focus_panel(self):
@@ -3310,6 +3380,11 @@ class MainWindow(QMainWindow):
             self.focus_popover.open_for(self.focus_button, align="right")
 
     def toggle_focus(self, checked=None):
+        if self.moyu_mode:
+            self.exit_moyu_mode()
+            if self.focus_mode:
+                self.toggle_focus()
+            return
         if not self.book:
             return
         entering = not self.focus_mode
@@ -3322,6 +3397,7 @@ class MainWindow(QMainWindow):
             self._pre_focus_maximized = self.isMaximized()
             self._chrome_visibility = {widget: not widget.isHidden() for widget in self.chrome_widgets}
         self._focus_resample_timer.stop()
+        self._focus_resample_pending = False
         self._focus_geometry_dirty = False
         self._set_focus_adjust_active(False)
         self._focus_adjust_mouse_drag_active = False
@@ -3351,9 +3427,287 @@ class MainWindow(QMainWindow):
         self._focus_geometry_dirty = False
         if not entering and self._pre_focus_maximized:
             self.showMaximized()
-        self.raise_()
-        self.activateWindow()
-        self.reader.setFocus()
+        if not self._moyu_preserve_external_focus:
+            self.raise_()
+            self.activateWindow()
+            self.reader.setFocus()
+
+    def _refresh_moyu_sentence(self, offset=None):
+        self._moyu_fragment_history = []
+        if not self.book:
+            self._moyu_sentences = []
+            self._moyu_sentence_index = -1
+            self._moyu_offset = 0
+            self.moyu_strip.set_sentence("")
+            return
+        section = self.book.sections[self.section_index]
+        self._moyu_sentences = sentence_spans(section.text)
+        requested_offset = self.reader.offset if offset is None else max(0, int(offset))
+        self._show_moyu_fragment(requested_offset)
+
+    def _show_moyu_fragment(self, offset):
+        if not self.book or not 0 <= self.section_index < len(self.book.sections):
+            return False
+        section = self.book.sections[self.section_index]
+        requested_offset = max(0, min(len(section.text), int(offset)))
+        sentence_index = sentence_index_for_offset(self._moyu_sentences, requested_offset)
+        self._moyu_sentence_index = sentence_index
+        if self._moyu_sentence_index < 0:
+            self._moyu_offset = 0
+            self.reader.offset = 0
+            self.moyu_strip.set_sentence("")
+            return False
+        start, end = self._moyu_sentences[self._moyu_sentence_index]
+        fragment_offset = requested_offset if start <= requested_offset < end else start
+        self._moyu_offset = fragment_offset
+        self.reader.offset = fragment_offset
+        self.moyu_strip.set_sentence(
+            section.text[fragment_offset:end], source_offset=fragment_offset,
+        )
+        return True
+
+    def _push_moyu_fragment_history(self):
+        self._moyu_fragment_history.append((self.section_index, self._moyu_offset))
+        if len(self._moyu_fragment_history) > 512:
+            del self._moyu_fragment_history[:-512]
+
+    def _position_moyu_bar(self, *, default=False):
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        current = self.geometry()
+        if default:
+            bounds = self._constrain_moyu_geometry(self.store.state.get("moyu_window"), area)
+            if bounds is None:
+                width = max(180, min(500, area.width() - 16))
+                height = self.moyu_strip.preferred_height
+                bounds = self._constrain_moyu_geometry(
+                    (area.x() + 8, area.bottom() - height + 1, width, height), area,
+                )
+        else:
+            height = max(current.height(), self.moyu_strip.minimumHeight())
+            bottom = current.y() + current.height()
+            bounds = self._constrain_moyu_geometry(
+                (current.x(), bottom - height, current.width(), height), area,
+            )
+        if bounds is None:
+            return
+        self.setGeometry(bounds)
+        if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
+
+    def _constrain_moyu_geometry(self, bounds, area):
+        if (
+            not isinstance(bounds, (list, tuple)) or len(bounds) != 4
+            or any(type(value) is not int for value in bounds)
+        ):
+            return None
+        x, y, width, height = bounds
+        if width <= 0 or height <= 0:
+            return None
+        width = max(180, min(width, max(180, area.width() - 16)))
+        minimum_height = self.moyu_strip.minimumHeight()
+        maximum_height = max(minimum_height, min(self.moyu_strip.MAXIMUM_HEIGHT, area.height()))
+        height = max(minimum_height, min(height, maximum_height))
+        max_x = max(area.x(), area.right() - width + 1)
+        max_y = max(area.y(), area.bottom() - height + 1)
+        x = max(area.x(), min(x, max_x))
+        y = max(area.y(), min(y, max_y))
+        return QRect(x, y, width, height)
+
+    def _moyu_pointer_is_near(self):
+        return self.geometry().adjusted(-28, -34, 28, 34).contains(QCursor.pos())
+
+    def _sync_moyu_visibility(self, initial=False):
+        if not self.moyu_mode:
+            self._moyu_visibility_timer.stop()
+            self._moyu_hide_timer.stop()
+            return
+        adjust_key_pressed = self.moyu_strip.adjustment_key_is_pressed()
+        self._set_focus_adjust_active(adjust_key_pressed)
+        if self.moyu_strip.interaction_active and not adjust_key_pressed:
+            self.moyu_strip.cancel_interaction()
+        if self.moyu_strip.interaction_active:
+            self._moyu_hide_timer.stop()
+            return
+        if self._moyu_menu_open:
+            self._moyu_hide_timer.stop()
+            return
+        if self._moyu_pointer_is_near():
+            self._moyu_hide_timer.stop()
+            self._moyu_auto_hide_armed = True
+            if self._moyu_auto_hidden:
+                self._moyu_auto_hidden = False
+                self.show()
+                self._configure_hotkeys()
+                self._schedule_auto_focus_resample(140)
+            return
+        if initial or not self._moyu_auto_hide_armed:
+            self._moyu_hide_timer.stop()
+            return
+        if not self._moyu_auto_hidden and not self._moyu_hide_timer.isActive():
+            self._moyu_hide_timer.start()
+
+    def _on_moyu_menu_opened(self):
+        self._moyu_menu_open = True
+        self._moyu_hide_timer.stop()
+
+    def _on_moyu_menu_closed(self):
+        self._moyu_menu_open = False
+        self._sync_moyu_visibility()
+
+    def _hide_moyu_if_away(self):
+        if self.moyu_mode and not self.moyu_strip.interaction_active and not self._moyu_pointer_is_near():
+            self._moyu_auto_hidden = True
+            self.hide()
+
+    def toggle_moyu_mode(self, checked=None):
+        if self.moyu_mode:
+            self.exit_moyu_mode()
+            return
+        if not self.book or self.loading or self.closed:
+            return
+        if self.isHidden() or self.isMinimized():
+            self.reveal()
+
+        self._moyu_return_to_focus = self.focus_mode
+        was_maximized = self.isMaximized()
+        previous_geometry = self.normalGeometry() if was_maximized else self.geometry()
+        if not self.focus_mode:
+            self.toggle_focus()
+        self._moyu_was_maximized = was_maximized
+        self._moyu_geometry = QRect(previous_geometry)
+        if self.isMaximized():
+            self.showNormal()
+
+        self._set_focus_adjust_active(False)
+        self._focus_resample_timer.stop()
+        self._focus_geometry_dirty = False
+        self.moyu_mode = True
+        self._moyu_auto_hidden = False
+        self._moyu_auto_hide_armed = False
+        self._sampled_focus_color = ""
+        self._sampled_focus_complex = False
+        self._moyu_menu_open = False
+        self.reader.hide()
+        self.moyu_strip.show()
+        self._moyu_previous_maximum_size = QSize(self.maximumSize())
+        self.setMinimumSize(180, self.moyu_strip.minimumHeight())
+        self.setMaximumHeight(self.moyu_strip.MAXIMUM_HEIGHT)
+        self.reader.setMinimumSize(0, 0)
+        self._refresh_moyu_sentence(self.reader.offset)
+        self.apply_settings(self.settings)
+        self._position_moyu_bar(default=True)
+        self.resample_focus_background(notify=False)
+        self._update_progress()
+        self._moyu_visibility_timer.start()
+        self._sync_moyu_visibility(initial=True)
+
+    def exit_moyu_mode(self):
+        if not self.moyu_mode:
+            return
+        was_auto_hidden = self._moyu_auto_hidden
+        return_to_focus = self._moyu_return_to_focus
+        previous_geometry = QRect(self._moyu_geometry) if self._moyu_geometry is not None else None
+        was_maximized = self._moyu_was_maximized
+        self.save_state()
+        self._set_focus_adjust_active(False)
+        self.moyu_strip.cancel_interaction()
+        self._moyu_visibility_timer.stop()
+        self._moyu_hide_timer.stop()
+        self._moyu_auto_hidden = False
+        self._moyu_auto_hide_armed = False
+        self._moyu_preserve_external_focus = True
+        self.moyu_mode = False
+        self.moyu_strip.hide()
+        self.reader.show()
+        if self._moyu_previous_maximum_size is not None:
+            self.setMaximumSize(self._moyu_previous_maximum_size)
+            self._moyu_previous_maximum_size = None
+        self.setMinimumSize(180 if self.focus_mode else 380, 100 if self.focus_mode else 360)
+        self.reader.setMinimumSize(80 if self.focus_mode else 160, 40 if self.focus_mode else 140)
+        if self.isMaximized():
+            self.showNormal()
+        self.apply_settings(self.settings)
+        if previous_geometry is not None:
+            self.setGeometry(previous_geometry)
+        if was_maximized:
+            self.showMaximized()
+        self.reader.offset = self._moyu_offset
+        self.reader.reflow()
+        if not return_to_focus and self.focus_mode:
+            self.toggle_focus()
+        if was_auto_hidden:
+            self.show()
+        self._moyu_preserve_external_focus = False
+        self._moyu_geometry = None
+        self._moyu_bar_geometry = None
+        self._moyu_sentences = []
+        self._moyu_sentence_index = -1
+        self._moyu_fragment_history = []
+        self._update_progress()
+
+    def turn_moyu_sentence(self, direction):
+        if not self.moyu_mode or not self.book or direction not in (-1, 1):
+            return
+
+        if direction > 0:
+            overflow_offset = self.moyu_strip.overflow_source_offset
+            if 0 <= self._moyu_sentence_index < len(self._moyu_sentences):
+                _sentence_start, sentence_end = self._moyu_sentences[self._moyu_sentence_index]
+            else:
+                sentence_end = self._moyu_offset
+            if overflow_offset is not None and self._moyu_offset < overflow_offset < sentence_end:
+                self._push_moyu_fragment_history()
+                self._show_moyu_fragment(overflow_offset)
+                self._update_progress()
+                self.schedule_save()
+                return
+        elif self._moyu_fragment_history:
+            previous_section, previous_offset = self._moyu_fragment_history.pop()
+            remaining_history = self._moyu_fragment_history.copy()
+            if previous_section != self.section_index:
+                self.open_section(previous_section, previous_offset)
+                self._moyu_fragment_history = remaining_history
+            else:
+                self._show_moyu_fragment(previous_offset)
+            self._update_progress()
+            self.schedule_save()
+            return
+
+        target = self._moyu_sentence_index + direction
+        if 0 <= target < len(self._moyu_sentences):
+            if direction > 0:
+                self._push_moyu_fragment_history()
+            self._moyu_sentence_index = target
+            start, end = self._moyu_sentences[target]
+            self._show_moyu_fragment(start)
+            self._update_progress()
+            self.schedule_save()
+            return
+
+        candidate = self.section_index + direction
+        previous_history = self._moyu_fragment_history.copy()
+        if direction > 0:
+            previous_history.append((self.section_index, self._moyu_offset))
+            if len(previous_history) > 512:
+                del previous_history[:-512]
+        while 0 <= candidate < len(self.book.sections):
+            section = self.book.sections[candidate]
+            offset = 0 if direction > 0 else len(section.text)
+            self.open_section(candidate, offset)
+            if self._moyu_sentences:
+                self._moyu_fragment_history = previous_history
+                break
+            candidate += direction
+
+    def toggle_moyu_lines(self):
+        if not self.moyu_mode:
+            return
+        values = self.settings.to_dict()
+        values["moyu_lines"] = 1 if self.settings.moyu_lines == 2 else 2
+        self.apply_settings(Settings.from_dict(values))
 
     def toggle_focus_opacity(self):
         if not self.focus_mode:
@@ -3482,8 +3836,13 @@ class MainWindow(QMainWindow):
         self.focus_button.setAccessibleName(focus_label)
         self._update_sidebar_toggle()
         if hasattr(self, "tray_focus_action"):
-            self.tray_focus_action.setText(self.t("退出专注模式" if self.focus_mode else "进入专注模式"))
-            self.tray_focus_action.setChecked(self.focus_mode)
+            focus_active = self.focus_mode and not self.moyu_mode
+            self.tray_focus_action.setText(self.t("退出专注模式" if focus_active else "进入专注模式"))
+            self.tray_focus_action.setChecked(focus_active)
+            self.tray_focus_action.setEnabled(bool(self.book and not self.loading and not self.moyu_mode))
+        if hasattr(self, "tray_moyu_action"):
+            self.tray_moyu_action.setText(self.t("退出摸鱼模式" if self.moyu_mode else "进入摸鱼模式"))
+            self.tray_moyu_action.setChecked(self.moyu_mode)
         if self.tray:
             self.tray.setToolTip("QuietReader")
         if not self.book:
@@ -3517,26 +3876,33 @@ class MainWindow(QMainWindow):
             )
 
     def _apply_window_style(self):
-        if self.focus_mode:
-            opacity = self._effective_focus_opacity()
-            if self._focus_adjust_active and opacity == 0:
+        opacity = self._effective_focus_opacity() if self.focus_mode or self.moyu_mode else 1.0
+        if self.focus_mode or self.moyu_mode:
+            if self._focus_adjust_active and opacity == 0 and not self.moyu_mode:
                 # A fully transparent surface can miss mouse input. Make only
-                # that case hit-testable while Alt is held; preserve every
-                # already-visible opacity and restore zero on key release.
+                # that case more reliably hit-testable while Alt is held.
                 alpha = 255 * 0.01
             else:
                 alpha = round(opacity * 255)
+            if self.focus_mode and not self.moyu_mode:
+                # Keep the full focus-window rectangle hit-testable for wheel
+                # paging even when its background is visually transparent.
+                alpha = max(1, alpha)
         else:
             alpha = 255
         effective_bg = self._effective_focus_background()
-        background_color = effective_bg if self.focus_mode else ""
+        background_color = effective_bg if self.focus_mode or self.moyu_mode else ""
         if hasattr(self, "reader"):
             self.reader.focus_background_override = effective_bg
+        if hasattr(self, "moyu_strip"):
+            self.moyu_strip.set_background_color(background_color if self.moyu_mode else "")
+            self.moyu_strip.set_background_opacity(opacity if self.moyu_mode else 1.0)
+            self.moyu_strip.set_adjust_outline(self.moyu_mode and self._focus_adjust_active)
         palette = colors(self.settings.theme, background_color)
         self.setStyleSheet(stylesheet(
-            palette, alpha,
-            borderless=self.focus_mode,
-            resize_outline=self.focus_mode and self._focus_adjust_active,
+            palette, 0 if self.moyu_mode else alpha,
+            borderless=self.focus_mode or self.moyu_mode,
+            resize_outline=self.focus_mode and not self.moyu_mode and self._focus_adjust_active,
             drop_highlight=self._drag_hover_active and not self.focus_mode,
         ))
         if hasattr(self, "brand_mark"):
@@ -3625,18 +3991,41 @@ class MainWindow(QMainWindow):
                 self._sampled_focus_complex = sample.is_complex
         was_visible = self.isVisible()
         bounds = self.geometry()
-        flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint if self.focus_mode else Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
-        if self.focus_mode:
+        if self.moyu_mode:
+            flags = (
+                Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.NoDropShadowWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+        else:
+            flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint if self.focus_mode else Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+        if self.focus_mode and not self.moyu_mode:
             flags |= Qt.WindowType.NoDropShadowWindowHint
-        if settings.always_on_top:
+        if settings.always_on_top and not self.moyu_mode:
             flags |= Qt.WindowType.WindowStaysOnTopHint
-        mask = Qt.WindowType.WindowType_Mask | Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint
+        mask = (
+            Qt.WindowType.WindowType_Mask | Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, self.moyu_mode)
         if self.windowFlags() & mask != flags & mask:
             self.setWindowFlags(flags)
         self.setGeometry(bounds)
         self._apply_window_style()
         self.pin_button.setChecked(settings.always_on_top)
         self.reader.apply_settings(settings)
+        self.moyu_strip.set_preferences(
+            lines=settings.moyu_lines,
+            theme=settings.theme,
+            language=settings.language,
+            font_family=settings.font_family,
+            adjust_key=settings.focus_adjust_key,
+            background_color=self._sampled_focus_color if self.moyu_mode else "",
+        )
+        if self.moyu_mode:
+            self.setMinimumSize(180, self.moyu_strip.minimumHeight())
+            self.setMaximumHeight(self.moyu_strip.MAXIMUM_HEIGHT)
         self._reader_settings_dirty = False
         self._sync_page_navigation()
         focus_popover_open = hasattr(self, "focus_popover") and not self.focus_popover.isHidden()
@@ -3644,6 +4033,8 @@ class MainWindow(QMainWindow):
         self.focus_shortcut.setKey(QKeySequence(settings.focus_key))
         self.focus_opacity_shortcut.setKey(QKeySequence(settings.focus_opacity_key))
         self.focus_resample_shortcut.setKey(QKeySequence(settings.focus_resample_key))
+        self.moyu_shortcut.setKey(QKeySequence(settings.moyu_key))
+        self.moyu_lines_shortcut.setKey(QKeySequence(settings.moyu_lines_key))
         self.visibility_shortcut.setKey(QKeySequence(settings.hotkey))
         self.emergency_shortcut.setKey(QKeySequence(settings.emergency_key))
         self.escape_shortcut.setEnabled(
@@ -3658,16 +4049,20 @@ class MainWindow(QMainWindow):
         self._retranslate()
         if was_visible:
             self.show()
-            self.activateWindow()
+            if not self.moyu_mode and not self._moyu_preserve_external_focus:
+                self.activateWindow()
             on_reader = self.main_pages.currentWidget() is self.reader_page
             popover_open = (
                 (hasattr(self, "appearance_popover") and not self.appearance_popover.isHidden())
                 or (hasattr(self, "focus_popover") and not self.focus_popover.isHidden())
             )
             search_focused = hasattr(self, "search_input") and self.search_input.hasFocus()
-            if on_reader and not popover_open and not search_focused:
+            if (
+                on_reader and not popover_open and not search_focused
+                and not self.moyu_mode and not self._moyu_preserve_external_focus
+            ):
                 self.reader.setFocus()
-        set_window_border_hidden(self, self.focus_mode)
+        set_window_border_hidden(self, self.focus_mode or self.moyu_mode)
         self._configure_hotkeys()
         if self.focus_mode:
             for widget in self.chrome_widgets:
@@ -3678,6 +4073,8 @@ class MainWindow(QMainWindow):
                 self.appearance_popover.dismiss()
             if hasattr(self, "focus_popover"):
                 self.focus_popover.dismiss()
+        if self.moyu_mode:
+            self._position_moyu_bar()
         self.schedule_save()
 
     def _sync_reader_navigation_labels(self):
@@ -3721,19 +4118,47 @@ class MainWindow(QMainWindow):
     def _configure_hotkeys(self, *, capture_active=None):
         if capture_active is not None:
             self._shortcut_capture_active = capture_active
-        if not self.hotkey or self.closed or self.quitting:
+        if self.closed or self.quitting:
+            for hotkey in self.moyu_hotkeys:
+                hotkey.unregister()
             return
         settings = self.settings
         enabled = settings.global_hotkey and not self._shortcut_capture_active
-        warning = self.hotkey.configure(enabled, settings.hotkey)
-        warnings = [self.t("显示 / 隐藏：{message}", message=self.t(warning))] if warning else []
+        warnings = []
+        if self.hotkey:
+            warning = self.hotkey.configure(enabled, settings.hotkey)
+            if warning:
+                warnings.append(self.t("显示 / 隐藏：{message}", message=self.t(warning)))
         if self.emergency_hotkey:
             emergency_enabled = enabled and self.isVisible() and not self.isMinimized()
             error = self.emergency_hotkey.configure(emergency_enabled, settings.emergency_key)
             if error:
                 warnings.append(self.t("紧急退出：{message}", message=self.t(error)))
-        self.hotkey_notice.setText("\n".join(warnings))
-        self.hotkey_notice.setVisible(bool(warnings) and not self.focus_mode)
+        moyu_visible = self.isVisible() or self._moyu_auto_hidden
+        moyu_enabled = self.moyu_mode and moyu_visible and not self.isMinimized() and not self._shortcut_capture_active
+        moyu_errors = []
+        for hotkey, key in zip(
+            self.moyu_hotkeys,
+            (settings.moyu_key, settings.previous_key, settings.next_key, settings.moyu_lines_key),
+        ):
+            error = hotkey.configure(moyu_enabled, key)
+            if error:
+                moyu_errors.append(f"{key}: {self.t(error)}")
+        toggle_registered = bool(self.moyu_hotkeys and self.moyu_hotkeys[0].registered)
+        lines_registered = bool(len(self.moyu_hotkeys) > 3 and self.moyu_hotkeys[3].registered)
+        if hasattr(self, "moyu_shortcut"):
+            self.moyu_shortcut.setEnabled(
+                not self._shortcut_capture_active and (not self.moyu_mode or not toggle_registered)
+            )
+        if hasattr(self, "moyu_lines_shortcut"):
+            self.moyu_lines_shortcut.setEnabled(
+                not self._shortcut_capture_active and self.moyu_mode and not lines_registered
+            )
+        if hasattr(self, "moyu_strip"):
+            self.moyu_strip.set_hotkey_tooltip("\n".join(moyu_errors))
+        if hasattr(self, "hotkey_notice"):
+            self.hotkey_notice.setText("\n".join(warnings))
+            self.hotkey_notice.setVisible(bool(warnings) and not self.focus_mode)
 
     def _handle_escape(self):
         if self.focus_mode:
@@ -3843,9 +4268,23 @@ class MainWindow(QMainWindow):
 
     def _screen_removed(self, *args):
         screens = [s.availableGeometry().getRect() for s in QGuiApplication.screens()]
-        self.setGeometry(*visible_bounds(self.geometry().getRect(), screens))
+        if self.moyu_mode:
+            self._position_moyu_bar()
+        else:
+            self.setGeometry(*visible_bounds(self.geometry().getRect(), screens))
 
     def reveal(self):
+        if self.moyu_mode:
+            was_hidden = self.isHidden() or self.isMinimized()
+            self._moyu_hide_timer.stop()
+            self._moyu_auto_hidden = False
+            self._moyu_auto_hide_armed = False
+            bar_geometry = QRect(self._moyu_bar_geometry or self.geometry())
+            self.showNormal()
+            self.setGeometry(bar_geometry)
+            if was_hidden:
+                self._schedule_auto_focus_resample(140)
+            return
         self._screen_removed()
         self.showNormal()
         self.raise_()
@@ -3858,6 +4297,11 @@ class MainWindow(QMainWindow):
             self.reveal()
 
     def hide_or_minimize(self):
+        if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
+            self._moyu_hide_timer.stop()
+            self._moyu_auto_hidden = False
+            self._moyu_auto_hide_armed = False
         self.save_state()
         if self.tray and self.tray.isVisible():
             self.hide()
@@ -3873,7 +4317,9 @@ class MainWindow(QMainWindow):
             return False
         self.store.state["settings"] = self.settings.to_dict()
         self.store.state["last_browse_dir"] = self._last_browse_dir
-        if not self.isMinimized() and not self.isMaximized():
+        if self.moyu_mode and not self.isMinimized():
+            self.store.state["moyu_window"] = list(self.geometry().getRect())
+        elif not self.isMinimized() and not self.isMaximized():
             bounds = self.geometry()
             self.store.state["window"] = list(bounds.getRect())
         if self.book:
@@ -3903,7 +4349,10 @@ class MainWindow(QMainWindow):
             self.appearance_popover.reposition()
         if hasattr(self, "focus_popover") and not self.focus_popover.isHidden():
             self.focus_popover.reposition()
-        if self.focus_mode:
+        if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
+            self._schedule_auto_focus_resample(160)
+        elif self.focus_mode:
             self._focus_geometry_dirty = True
             if not self._focus_adjust_active:
                 self._schedule_auto_focus_resample(160)
@@ -3912,6 +4361,11 @@ class MainWindow(QMainWindow):
         was_hidden = self._window_hidden
         self._window_hidden = False
         super().showEvent(event)
+        if self.moyu_mode and not self._moyu_visibility_timer.isActive():
+            self._moyu_auto_hidden = False
+            self._moyu_auto_hide_armed = False
+            self._moyu_visibility_timer.start()
+            QTimer.singleShot(0, lambda: self._sync_moyu_visibility(initial=True))
         self._configure_hotkeys()
         if hasattr(self, "sidebar"):
             self._sync_page_navigation()
@@ -3925,13 +4379,21 @@ class MainWindow(QMainWindow):
             self._schedule_auto_focus_resample(140)
 
     def hideEvent(self, event):
-        self._window_hidden = True
+        auto_hidden_moyu = self.moyu_mode and self._moyu_auto_hidden
+        if not auto_hidden_moyu:
+            self._window_hidden = True
         if hasattr(self, "_focus_resample_timer"):
             self._focus_resample_timer.stop()
         if hasattr(self, "_focus_picker"):
             self._focus_picker.cancel()
-        if self.emergency_hotkey:
+        if self.emergency_hotkey and not auto_hidden_moyu:
             self.emergency_hotkey.unregister()
+        if not auto_hidden_moyu:
+            for hotkey in self.moyu_hotkeys:
+                hotkey.unregister()
+            if self.moyu_mode:
+                self._moyu_visibility_timer.stop()
+                self._moyu_hide_timer.stop()
         if hasattr(self, "toast"):
             self.toast.dismiss()
         if hasattr(self, "appearance_popover"):
@@ -3949,12 +4411,16 @@ class MainWindow(QMainWindow):
             was_minimized = bool(event.oldState() & Qt.WindowState.WindowMinimized)
             if was_minimized and not self.isMinimized() and self.focus_mode:
                 self._schedule_auto_focus_resample(140)
+            self._configure_hotkeys()
 
     def moveEvent(self, event):
         super().moveEvent(event)
         if hasattr(self, "save_timer"):
             self.schedule_save()
-        if self.focus_mode:
+        if self.moyu_mode:
+            self._moyu_bar_geometry = QRect(self.geometry())
+            self._schedule_auto_focus_resample(160)
+        elif self.focus_mode:
             self._focus_geometry_dirty = True
             if not self._focus_adjust_active:
                 self._schedule_auto_focus_resample(160)
@@ -3999,22 +4465,23 @@ class MainWindow(QMainWindow):
         return Qt.CursorShape.ArrowCursor
 
     def _set_focus_adjust_active(self, active):
-        active = bool(active and self.focus_mode)
+        active = bool(active and (self.focus_mode or self.moyu_mode))
         if active == self._focus_adjust_active:
             return
         self._focus_adjust_active = active
         self._focus_adjust_drag = None
         self._focus_system_drag_active = False
         if active:
-            self._focus_resample_timer.stop()
-            QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
-            self._focus_cursor_override = True
+            if not self.moyu_mode:
+                QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
+                self._focus_cursor_override = True
         elif self._focus_cursor_override:
             QApplication.restoreOverrideCursor()
             self._focus_cursor_override = False
         self._apply_window_style()
-        if not active and self.focus_mode and self._focus_geometry_dirty:
+        if not active and self.focus_mode and (self._focus_geometry_dirty or self._focus_resample_pending):
             self._focus_geometry_dirty = False
+            self._focus_resample_pending = False
             self._schedule_auto_focus_resample(90)
 
     def _update_focus_adjust_cursor(self, global_position):
@@ -4114,6 +4581,8 @@ class MainWindow(QMainWindow):
         event_type = event.type()
         if event_type == QEvent.Type.ApplicationDeactivate or (event_type == QEvent.Type.WindowDeactivate and watched is self):
             self._set_focus_adjust_active(False)
+            if hasattr(self, "moyu_strip"):
+                self.moyu_strip.cancel_interaction()
             self._drag_has_valid = False
             self._set_drag_hover_active(False)
             return False
@@ -4123,6 +4592,7 @@ class MainWindow(QMainWindow):
         if (
             isinstance(watched, QWidget)
             and watched.window() is self
+            and not self.moyu_mode
             and event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease)
             and event.key() == self._focus_adjust_key()
         ):
@@ -4190,6 +4660,8 @@ class MainWindow(QMainWindow):
             return
         self.release_checker.stop()
         self._set_focus_adjust_active(False)
+        self._moyu_visibility_timer.stop()
+        self._moyu_hide_timer.stop()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
@@ -4215,6 +4687,8 @@ class MainWindow(QMainWindow):
             self.hotkey.close()
         if self.emergency_hotkey:
             self.emergency_hotkey.close()
+        for hotkey in self.moyu_hotkeys:
+            hotkey.close()
         if self.tray:
             self.tray.hide()
         self.hide()
@@ -4226,6 +4700,8 @@ class MainWindow(QMainWindow):
     def emergency_exit(self):
         """Exit this process without a tray close or waiting for import workers."""
         self.quitting = True
+        self._moyu_visibility_timer.stop()
+        self._moyu_hide_timer.stop()
         try:
             self.hide()
             if self.tray:
@@ -4242,6 +4718,8 @@ class MainWindow(QMainWindow):
                     self.hotkey.close()
                 if self.emergency_hotkey:
                     self.emergency_hotkey.close()
+                for hotkey in self.moyu_hotkeys:
+                    hotkey.close()
                 release_lock = getattr(QApplication.instance(), "_quietreader_release_lock", None)
                 if release_lock:
                     release_lock()
