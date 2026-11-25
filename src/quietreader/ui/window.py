@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import re
 import sys
+from threading import Event
 from time import time
 
 from PySide6.QtCore import (
@@ -130,6 +131,57 @@ class ImportTask(QRunnable):
             self.signals.failed.emit("导入失败，文件结构可能不受支持。请检查文件后重试。", False)
         finally:
             self.signals.finished.emit()
+
+
+class BookSearchSignals(QObject):
+    completed = Signal(object)
+    failed = Signal(object)
+
+
+class BookSearchTask(QRunnable):
+    def __init__(self, generation, book_id, query, section_texts, reference, navigate, anchor, cancel_event):
+        super().__init__()
+        self.generation = generation
+        self.book_id = book_id
+        self.query = query
+        self.section_texts = section_texts
+        self.reference = reference
+        self.navigate = navigate
+        self.anchor = anchor
+        self.cancel_event = cancel_event
+        self.signals = BookSearchSignals()
+
+    def run(self):
+        try:
+            pattern = re.compile(re.escape(self.query), re.IGNORECASE)
+            matches = []
+            section_ranges = {}
+            chosen = None
+            ref_sec, ref_off = self.reference
+            for sec_idx, text in enumerate(self.section_texts):
+                if self.cancel_event.is_set():
+                    return
+                range_start = len(matches)
+                for match in pattern.finditer(text):
+                    if self.cancel_event.is_set():
+                        return
+                    start, end = match.start(), match.end()
+                    matches.append((sec_idx, start, end))
+                    if chosen is None and (sec_idx, start) >= (ref_sec, ref_off):
+                        chosen = len(matches) - 1
+                if len(matches) > range_start:
+                    section_ranges[sec_idx] = (range_start, len(matches))
+
+            if self.cancel_event.is_set():
+                return
+            if matches and chosen is None:
+                chosen = 0
+            self.signals.completed.emit((
+                self.generation, self.book_id, self.query, matches,
+                section_ranges, chosen, self.navigate, self.anchor,
+            ))
+        except Exception:
+            self.signals.failed.emit((self.generation, self.book_id, self.query))
 
 
 class DragHeader(QWidget):
@@ -685,10 +737,14 @@ class MainWindow(QMainWindow):
         self._last_sidebar_tab_index = 0
         self._sidebar_info_return_tab = 0
         self._search_matches: list[tuple[int, int, int]] = []
+        self._search_section_match_ranges: dict[int, tuple[int, int]] = {}
         self._search_index = -1
         self._search_origin: tuple[int, int] | None = None
         self._search_origin_pushed = False
         self._in_search_navigation = False
+        self._book_search_generation = 0
+        self._book_search_cancel_event = None
+        self._book_search_request = None
         self.status_source = ("离线优先。添加书籍即可开始阅读。", {})
         self._toast_status_source = None
         self.tray = None
@@ -698,6 +754,12 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
+        self.search_pool = QThreadPool(self)
+        self.search_pool.setMaxThreadCount(1)
+        self.book_search_timer = QTimer(self)
+        self.book_search_timer.setSingleShot(True)
+        self.book_search_timer.setInterval(220)
+        self.book_search_timer.timeout.connect(self._dispatch_book_search)
         self.setWindowTitle("QuietReader · 静读")
         self.setMinimumSize(380, 360)
         self.setWindowIcon(book_icon())
@@ -1865,6 +1927,8 @@ class MainWindow(QMainWindow):
                 self.toc_filter.clear()
                 self.toc_filter.blockSignals(False)
             self.close_book_search(focus_reader=False, clear_query=True)
+        else:
+            self._invalidate_book_search_requests()
         self.book = book
         self._restore_jump_history(book)
         record = next((item for item in self.store.state["books"] if item["id"] == book.id), None)
@@ -2143,9 +2207,11 @@ class MainWindow(QMainWindow):
             self.search_input.selectAll()
 
     def close_book_search(self, checked=False, *, focus_reader=True, clear_query=False):
+        self._invalidate_book_search_requests()
         was_active = self._search_active
         self._search_active = False
         self._search_matches = []
+        self._search_section_match_ranges = {}
         self._search_index = -1
         self._search_origin = None
         self._search_origin_pushed = False
@@ -2182,14 +2248,28 @@ class MainWindow(QMainWindow):
     def _on_book_search_changed(self, _text: str):
         if not self._search_active or not self.book:
             return
-        self._run_book_search(navigate=True)
+        self._schedule_book_search(navigate=True, debounce=True)
 
     def _run_book_search(self, *, navigate: bool = True, anchor: tuple[int, int] | None = None):
         if not self.book:
             return
+
+        self._schedule_book_search(navigate=navigate, anchor=anchor, debounce=False)
+
+    def _invalidate_book_search_requests(self):
+        self._book_search_generation += 1
+        self.book_search_timer.stop()
+        if self._book_search_cancel_event is not None:
+            self._book_search_cancel_event.set()
+        self._book_search_cancel_event = None
+        self._book_search_request = None
+
+    def _schedule_book_search(self, *, navigate: bool, anchor=None, debounce: bool):
+        self._invalidate_book_search_requests()
         query = self.search_input.text()
         if not query:
             self._search_matches = []
+            self._search_section_match_ranges = {}
             self._search_index = -1
             self.search_result_model.set_matches(self.book, [])
             self._set_search_results_state("")
@@ -2198,12 +2278,70 @@ class MainWindow(QMainWindow):
             self.search_next_button.setEnabled(False)
             self.reader.set_search_highlights([], None)
             return
-        pattern = re.compile(re.escape(query), re.IGNORECASE)
-        matches: list[tuple[int, int, int]] = []
-        for sec_idx, section in enumerate(self.book.sections):
-            for match in pattern.finditer(section.text):
-                matches.append((sec_idx, match.start(), match.end()))
+
+        generation = self._book_search_generation
+        self._book_search_request = (generation, self.book.id, query, navigate, anchor)
+        self._search_matches = []
+        self._search_section_match_ranges = {}
+        self._search_index = -1
+        self.search_result_model.set_matches(self.book, [])
+        self.search_results.hide()
+        self.search_empty_label.setText(self.t("正在搜索…"))
+        self.search_empty_label.show()
+        self.search_count_label.setText(self.t("搜索中…"))
+        self.search_prev_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
+        self.reader.set_search_highlights([], None)
+        if debounce:
+            self.book_search_timer.start()
+        else:
+            self._dispatch_book_search()
+
+    def _dispatch_book_search(self):
+        request = self._book_search_request
+        if request is None:
+            return
+        generation, book_id, query, navigate, anchor = request
+        if (
+            generation != self._book_search_generation
+            or not self._search_active
+            or not self.book
+            or self.book.id != book_id
+            or self.search_input.text() != query
+        ):
+            return
+
+        reference = (
+            anchor if anchor is not None
+            else self._search_origin if self._search_origin is not None
+            else (self.section_index, self.reader.offset)
+        )
+        section_texts = tuple(section.text for section in self.book.sections)
+        cancel_event = Event()
+        self._book_search_cancel_event = cancel_event
+        task = BookSearchTask(
+            generation, book_id, query, section_texts, reference,
+            navigate, anchor, cancel_event,
+        )
+        task.signals.completed.connect(self._book_search_completed)
+        task.signals.failed.connect(self._book_search_failed)
+        self._book_search_request = None
+        self.search_pool.start(task)
+
+    def _book_search_completed(self, result):
+        generation, book_id, query, matches, section_ranges, chosen, navigate, _anchor = result
+        if (
+            generation != self._book_search_generation
+            or not self._search_active
+            or not self.book
+            or self.book.id != book_id
+            or self.search_input.text() != query
+        ):
+            return
+
+        self._book_search_cancel_event = None
         self._search_matches = matches
+        self._search_section_match_ranges = section_ranges
         self.search_result_model.set_matches(self.book, matches)
         self._set_search_results_state(query)
         if not matches:
@@ -2215,15 +2353,6 @@ class MainWindow(QMainWindow):
             return
         self.search_prev_button.setEnabled(True)
         self.search_next_button.setEnabled(True)
-        ref_sec, ref_off = (
-            anchor
-            if anchor is not None
-            else (self._search_origin if self._search_origin is not None else (self.section_index, self.reader.offset))
-        )
-        chosen = next(
-            (i for i, (sec_i, start_i, _end_i) in enumerate(matches) if (sec_i, start_i) >= (ref_sec, ref_off)),
-            0,
-        )
         if navigate:
             self._go_to_search_match(chosen)
         else:
@@ -2231,6 +2360,24 @@ class MainWindow(QMainWindow):
             self.search_count_label.setText(f"{chosen + 1} / {len(matches)}")
             self._sync_search_result_selection(chosen)
             self._sync_reader_search_highlights()
+
+    def _book_search_failed(self, failure):
+        generation, book_id, query = failure
+        if (
+            generation != self._book_search_generation
+            or not self._search_active
+            or not self.book
+            or self.book.id != book_id
+            or self.search_input.text() != query
+        ):
+            return
+        self._book_search_cancel_event = None
+        self.search_empty_label.setText(self.t("搜索失败"))
+        self.search_empty_label.show()
+        self.search_results.hide()
+        self.search_count_label.setText(self.t("搜索失败"))
+        self.search_prev_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
 
     def find_next_match(self):
         if not self._search_matches:
@@ -2303,10 +2450,10 @@ class MainWindow(QMainWindow):
         if not self._search_active or not self._search_matches or not self.book:
             self.reader.set_search_highlights([], None)
             return
+        range_start, range_end = self._search_section_match_ranges.get(self.section_index, (0, 0))
         sec_matches = [
             (start_off, end_off)
-            for sec_i, start_off, end_off in self._search_matches
-            if sec_i == self.section_index
+            for _sec_i, start_off, end_off in self._search_matches[range_start:range_end]
         ]
         active_range = None
         if 0 <= self._search_index < len(self._search_matches):
@@ -3939,6 +4086,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "settings_page"):
             self.settings_page.cancel_active_capture()
         self.closed = True
+        self._invalidate_book_search_requests()
+        self.search_pool.waitForDone()
         self.pool.waitForDone()
         if self.hotkey:
             self.hotkey.close()

@@ -4,7 +4,7 @@ import json
 from math import isfinite
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QApplication, QFrame, QHBoxLayout, QLabel,
@@ -615,6 +615,10 @@ class ShelfPanel(QWidget):
         self._view_mode = "grid"  # "grid" | "list"
         self._sort_mode = "recent"  # "recent" | "title" | "progress"
         self._syncing_scope = False
+        self._search_debounce_timer = QTimer(self)
+        self._search_debounce_timer.setSingleShot(True)
+        self._search_debounce_timer.setInterval(180)
+        self._search_debounce_timer.timeout.connect(self._populate_book_view)
 
         # Hosted in MainWindow's unified topbar
         action_holder = QWidget(self)
@@ -706,7 +710,7 @@ class ShelfPanel(QWidget):
             vector_icon("search", self._palette["muted"], 14),
             QLineEdit.ActionPosition.LeadingPosition,
         )
-        self.search_input.textChanged.connect(self._populate_book_view)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
         tb_layout.addWidget(self.search_input, 10)
 
         tb_layout.addStretch(1)
@@ -1052,7 +1056,11 @@ class ShelfPanel(QWidget):
             rows.sort(key=lambda r: display_title_for_record(r).casefold())
         return rows
 
+    def _on_search_text_changed(self, _text: str):
+        self._search_debounce_timer.start()
+
     def _populate_book_view(self):
+        self._search_debounce_timer.stop()
         selected_id = None
         current = self.book_view.currentItem()
         if current is not None:
