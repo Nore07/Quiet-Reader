@@ -4242,6 +4242,9 @@ class MainWindow(QMainWindow):
     def reveal(self):
         if self.moyu_mode:
             was_hidden = self.isHidden() or self.isMinimized()
+            self._moyu_hide_timer.stop()
+            self._moyu_auto_hidden = False
+            self._moyu_auto_hide_armed = False
             bar_geometry = QRect(self._moyu_bar_geometry or self.geometry())
             self.showNormal()
             self.setGeometry(bar_geometry)
@@ -4262,6 +4265,9 @@ class MainWindow(QMainWindow):
     def hide_or_minimize(self):
         if self.moyu_mode:
             self._moyu_bar_geometry = QRect(self.geometry())
+            self._moyu_hide_timer.stop()
+            self._moyu_auto_hidden = False
+            self._moyu_auto_hide_armed = False
         self.save_state()
         if self.tray and self.tray.isVisible():
             self.hide()

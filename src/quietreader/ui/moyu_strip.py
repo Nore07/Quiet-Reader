@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
 
 from quietreader.i18n import tr
 from quietreader.ui.theme import colors
+from quietreader.ui.wheel_navigation import WheelPageAccumulator
 
 
 _SENTENCE_ENDINGS = frozenset("。！？!?…；;.")
@@ -88,6 +89,7 @@ class MoyuStrip(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._wheel_page_accumulator = WheelPageAccumulator(self.turn_requested.emit, self)
         self._sentence = ""
         self._line_count = 1
         self._language = "system"
@@ -253,12 +255,7 @@ class MoyuStrip(QWidget):
             painter.drawRect(self.rect().adjusted(1, 1, -2, -2))
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y() or event.pixelDelta().y()
-        if not delta:
-            event.ignore()
-            return
-        self.turn_requested.emit(-1 if delta > 0 else 1)
-        event.accept()
+        self._wheel_page_accumulator.handle(event)
 
     def _resize_edges_at(self, position):
         edges = Qt.Edge(0)

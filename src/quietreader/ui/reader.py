@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QMenu, QWidget
 from quietreader.domain.models import Settings
 from quietreader.ui.theme import colors
 from quietreader.i18n import tr
+from quietreader.ui.wheel_navigation import WheelPageAccumulator
 
 
 def qt_offset(text: str, python_offset: int) -> int:
@@ -108,6 +109,7 @@ class PageView(QWidget):
         self.setAccessibleName("阅读正文")
         self.setMinimumSize(160, 140)
         self.setMouseTracking(True)
+        self._wheel_page_accumulator = WheelPageAccumulator(self.turned.emit, self)
 
     @staticmethod
     def _decode_section_images(document: QTextDocument, images, parent=None):
@@ -387,12 +389,7 @@ class PageView(QWidget):
         self._resize_reflow_timer.start()
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y() or event.pixelDelta().y()
-        if not delta:
-            event.ignore()
-            return
-        self.turned.emit(-1 if delta > 0 else 1)
-        event.accept()
+        self._wheel_page_accumulator.handle(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)

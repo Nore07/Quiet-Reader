@@ -156,9 +156,23 @@ class Settings:
             "moyu_key": "Ctrl+Alt+M",
             "moyu_lines_key": "Ctrl+Alt+Shift+L",
         }
+        deferred_moyu_bindings = {
+            "moyu_key": (
+                "Ctrl+Alt+M", "Ctrl+Alt+Shift+M",
+                *(f"F{number}" for number in range(12, 25)),
+                "Ctrl+Alt+F11", "Ctrl+Alt+F12",
+            ),
+            "moyu_lines_key": (
+                "Ctrl+Alt+Shift+L", "Ctrl+Alt+L",
+                *(f"F{number}" for number in (*range(6, 0, -1), *range(8, 25))),
+                "Ctrl+Alt+F7",
+            ),
+        }
         bindings = {}
         for key in BINDING_FIELDS:
             value = raw.get(key, getattr(result, key))
+            if key in deferred_moyu_bindings and key not in raw:
+                value = ""
             if key in legacy_defaults and value == legacy_defaults[key]:
                 new_default = getattr(result, key)
                 conflict = any(
@@ -191,6 +205,14 @@ class Settings:
                 used = {value for key, value in bindings.items() if key != field}
                 if bindings[field] in used:
                     bindings[field] = next((candidate for candidate in candidates if candidate not in used), bindings[field])
+        # Preserve saved bindings first; only then assign defaults for fields added
+        # with Moyu mode, falling back when an older shortcut already uses F11/F7.
+        for field, candidates in deferred_moyu_bindings.items():
+            if field in raw and bindings[field]:
+                continue
+            used = {value for key, value in bindings.items() if key != field and value}
+            preferred = (getattr(result, field), *candidates)
+            bindings[field] = next((candidate for candidate in preferred if candidate not in used), "")
         if not binding_error(bindings):
             for key, value in bindings.items():
                 setattr(result, key, value)
