@@ -565,6 +565,7 @@ class MainWindow(QMainWindow):
         self._search_active = False
         self._search_return_tab = 0
         self._last_sidebar_tab_index = 0
+        self._sidebar_info_return_tab = 0
         self._search_matches: list[tuple[int, int, int]] = []
         self._search_index = -1
         self._search_origin: tuple[int, int] | None = None
@@ -834,6 +835,11 @@ class MainWindow(QMainWindow):
         card_text.addWidget(self.sidebar_book_meta)
         card_text.addStretch(1)
         card_layout.addLayout(card_text, 1)
+        self.sidebar_info_button = self._icon_button(
+            "info", self._toggle_sidebar_info, "资料",
+            size=14, checkable=True, fixed_size=(24, 24),
+        )
+        card_layout.addWidget(self.sidebar_info_button, 0, Qt.AlignmentFlag.AlignVCenter)
         side.addWidget(self.sidebar_book_card)
 
         self.reading_tabs = _SidebarTabSwitcher(self.sidebar)
@@ -928,7 +934,7 @@ class MainWindow(QMainWindow):
         self.search_tab_index = self.reading_tabs.addTab(self.search_panel, "搜索", "search")
         self.reading_tabs.currentChanged.connect(self._on_reading_tab_changed)
         self.reading_tabs.setTabVisible(self.search_tab_index, False)
-        self.reading_tabs.setTabVisible(2, True)
+        self.reading_tabs.setTabVisible(2, False)
         self.reading_tabs.setTabVisible(3, False)
         self.reading_tabs.setTabVisible(4, False)
         side.addWidget(self.reading_tabs, 1)
@@ -1747,7 +1753,7 @@ class MainWindow(QMainWindow):
         self.book_title.setText(display_title)
         self.book_title.setProperty("translation_source", None)
         self.book_info.set_book(book, self.settings.language, display_title=display_title)
-        self.reading_tabs.setTabVisible(2, True)
+        self.reading_tabs.setTabVisible(2, False)
         self.reading_tabs.setTabVisible(self.search_tab_index, True)
         self._refresh_bookmarks()
         self.chapters.clear()
@@ -1918,7 +1924,21 @@ class MainWindow(QMainWindow):
         self.search_icon_label.setVisible(bar_w >= 210)
         self.search_count_label.setVisible(bar_w >= 178)
 
+    def _toggle_sidebar_info(self, checked=False):
+        info_index = 2
+        current = self.reading_tabs.currentIndex()
+        if checked:
+            if current != info_index:
+                self._sidebar_info_return_tab = current
+            self.reading_tabs.setCurrentIndex(info_index)
+        elif current == info_index:
+            target = self._sidebar_info_return_tab
+            if target == info_index or not 0 <= target < self.reading_tabs.stack.count():
+                target = 0
+            self.reading_tabs.setCurrentIndex(target)
+
     def _on_reading_tab_changed(self, index: int):
+        self.sidebar_info_button.setChecked(index == 2)
         if index == self.search_tab_index:
             if not self.book:
                 self.reading_tabs.setCurrentIndex(self._last_sidebar_tab_index)
@@ -2561,7 +2581,7 @@ class MainWindow(QMainWindow):
         self.sidebar_cover.setPixmap(cover)
         title_metrics = QFontMetrics(self.sidebar_book_title.font())
         meta_metrics = QFontMetrics(self.sidebar_book_meta.font())
-        avail = max(80, self.sidebar.width() - 74)
+        avail = max(40, self.sidebar.width() - 104)
         self.sidebar_book_title.setText(title_metrics.elidedText(title, Qt.TextElideMode.ElideRight, avail))
         self.sidebar_book_title.setToolTip(title)
         self.sidebar_book_meta.setText(meta_metrics.elidedText(meta, Qt.TextElideMode.ElideRight, avail))
