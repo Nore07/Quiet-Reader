@@ -2843,7 +2843,11 @@ class MainWindow(QMainWindow):
 
             self.page_label.setProperty("translation_source", None)
             full_label = tr("{page} / {pages} 页 · 本章 {progress}", self.settings.language, page=self.reader.page + 1, pages=self.reader.page_count, progress=f"{chapter_fraction:.0%}")
-            compact_label = f"{self.reader.page + 1}/{self.reader.page_count} · 本章{chapter_fraction:.0%}"
+            compact_label = tr(
+                "{page}/{pages} · 本章{progress}", self.settings.language,
+                page=self.reader.page + 1, pages=self.reader.page_count,
+                progress=f"{chapter_fraction:.0%}",
+            )
             self.page_label.setProperty("full_text", full_label)
             self.page_label.setProperty("compact_text", compact_label)
             self.page_label.setToolTip(full_label)
