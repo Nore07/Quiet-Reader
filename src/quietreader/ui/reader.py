@@ -14,6 +14,7 @@ from quietreader.domain.models import Settings
 from quietreader.persistence.store import MAX_TERM_TEXT, normalize_term_note, normalize_term_text
 from quietreader.ui.theme import colors
 from quietreader.i18n import tr
+from quietreader.ui.wheel_navigation import WheelPageAccumulator
 
 
 def qt_offset(text: str, python_offset: int) -> int:
@@ -126,6 +127,7 @@ class PageView(QWidget):
         self.setAccessibleName("阅读正文")
         self.setMinimumSize(160, 140)
         self.setMouseTracking(True)
+        self._wheel_page_accumulator = WheelPageAccumulator(self._emit_wheel_turn, self)
 
     @staticmethod
     def _decode_section_images(document: QTextDocument, images, parent=None):
@@ -576,6 +578,10 @@ class PageView(QWidget):
         super().resizeEvent(event)
         self._resize_reflow_timer.start()
 
+    def _emit_wheel_turn(self, direction):
+        self.clear_term_hover()
+        self.turned.emit(direction)
+
     def _term_char_format(self, palette: dict) -> QTextCharFormat:
         is_dark_paper = QColor(palette["paper"]).lightness() < 128
         term_fmt = QTextCharFormat()
@@ -597,6 +603,9 @@ class PageView(QWidget):
         term_fmt.setUnderlineColor(term_underline)
         term_fmt.setBackground(term_wash)
         return term_fmt
+
+    def wheelEvent(self, event):
+        self._wheel_page_accumulator.handle(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)

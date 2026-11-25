@@ -30,7 +30,7 @@ _SECTION_SPECS = (
     ("appearance", "palette", "外观与语言", "选择阅读主题配色与界面显示语言；调整即刻生效。"),
     ("reading", "typography", "阅读与排版", "自定义正文字体、字号、行距与页边距，打造舒适版面。"),
     ("focus", "focus", "专注与窗口", "配置专注模式背景、透明度与窗口置顶、托盘等桌面行为。"),
-    ("shortcuts", "keyboard", "快捷键", "点击按键即可重新录入；Esc、Ctrl+O、Ctrl+, 与 Ctrl+C 为系统保留键。"),
+    ("shortcuts", "keyboard", "快捷键", "点击按键即可重新录入；摸鱼模式开启期间，模式热键全局生效。"),
     ("storage", "storage", "数据与存储", "书籍、阅读进度和配置均保存在本地数据目录。"),
     ("about", "info", "关于", "查看 QuietReader 的版本和项目链接。"),
 )
@@ -619,8 +619,8 @@ class SettingsPage(QWidget):
         self.binding_buttons: dict[str, KeyBindingButton] = {}
         groups = (
             (
-                ("next_key", "下一页（正文聚焦时）"),
-                ("previous_key", "上一页（正文聚焦时）"),
+                ("next_key", "下一页 / 下一句（阅读与摸鱼模式）"),
+                ("previous_key", "上一页 / 上一句（阅读与摸鱼模式）"),
                 ("next_chapter_key", "下一章（正文聚焦时）"),
                 ("previous_chapter_key", "上一章（正文聚焦时）"),
             ),
@@ -630,6 +630,10 @@ class SettingsPage(QWidget):
                 ("focus_resample_key", "重新采样专注背景色"),
                 ("hotkey", "显示 / 隐藏快捷键"),
                 ("emergency_key", "紧急退出快捷键"),
+            ),
+            (
+                ("moyu_key", "切换摸鱼模式"),
+                ("moyu_lines_key", "切换摸鱼模式单行 / 两行"),
             ),
         )
         for group in groups:
@@ -869,6 +873,7 @@ class SettingsPage(QWidget):
             updated = replace(
                 self._settings,
                 global_hotkey=defaults.global_hotkey,
+                moyu_lines=defaults.moyu_lines,
                 **{key: getattr(defaults, key) for key in BINDING_FIELDS},
             )
         elif sec == "about":

@@ -114,6 +114,9 @@ class Settings:
     focus_opacity_key: str = "F9"
     focus_resample_key: str = "F8"
     focus_adjust_key: str = "Alt"
+    moyu_key: str = "F11"
+    moyu_lines_key: str = "F7"
+    moyu_lines: int = 1
     auto_check_updates: bool = False
     focus_auto_background: bool = False
     focus_sample_trigger: str = "auto"
@@ -128,6 +131,7 @@ class Settings:
             ("padding", 12, 72, int), ("letter_spacing", 0, 5, float),
             ("paragraph_spacing", 0, 40, int), ("opacity", 0, 1, float),
             ("focus_complex_opacity", 0, 1, float),
+            ("moyu_lines", 1, 2, int),
         ]:
             try:
                 value = float(raw.get(key, getattr(result, key)))
@@ -154,7 +158,37 @@ class Settings:
             result.focus_sample_trigger = raw["focus_sample_trigger"]
         if isinstance(raw.get("font_family"), str) and 0 < len(raw["font_family"]) <= 100:
             result.font_family = raw["font_family"]
-        bindings = {key: normalize_binding(raw.get(key, getattr(result, key))) for key in BINDING_FIELDS}
+        # Replace only the old shipped defaults; preserve user-selected bindings.
+        legacy_defaults = {
+            "moyu_key": "Ctrl+Alt+M",
+            "moyu_lines_key": "Ctrl+Alt+Shift+L",
+        }
+        deferred_moyu_bindings = {
+            "moyu_key": (
+                "Ctrl+Alt+M", "Ctrl+Alt+Shift+M",
+                *(f"F{number}" for number in range(12, 25)),
+                "Ctrl+Alt+F11", "Ctrl+Alt+F12",
+            ),
+            "moyu_lines_key": (
+                "Ctrl+Alt+Shift+L", "Ctrl+Alt+L",
+                *(f"F{number}" for number in (*range(6, 0, -1), *range(8, 25))),
+                "Ctrl+Alt+F7",
+            ),
+        }
+        bindings = {}
+        for key in BINDING_FIELDS:
+            value = raw.get(key, getattr(result, key))
+            if key in deferred_moyu_bindings and key not in raw:
+                value = ""
+            if key in legacy_defaults and value == legacy_defaults[key]:
+                new_default = getattr(result, key)
+                conflict = any(
+                    normalize_binding(raw.get(other, getattr(result, other))) == new_default
+                    for other in BINDING_FIELDS
+                    if other != key
+                )
+                value = legacy_defaults[key] if conflict else new_default
+            bindings[key] = normalize_binding(value)
         if not bindings["focus_opacity_key"] or bindings["focus_opacity_key"] in {
             value for key, value in bindings.items() if key != "focus_opacity_key"
         }:
@@ -178,6 +212,14 @@ class Settings:
                 used = {value for key, value in bindings.items() if key != field}
                 if bindings[field] in used:
                     bindings[field] = next((candidate for candidate in candidates if candidate not in used), bindings[field])
+        # Preserve saved bindings first; only then assign defaults for fields added
+        # with Moyu mode, falling back when an older shortcut already uses F11/F7.
+        for field, candidates in deferred_moyu_bindings.items():
+            if field in raw and bindings[field]:
+                continue
+            used = {value for key, value in bindings.items() if key != field and value}
+            preferred = (getattr(result, field), *candidates)
+            bindings[field] = next((candidate for candidate in preferred if candidate not in used), "")
         if not binding_error(bindings):
             for key, value in bindings.items():
                 setattr(result, key, value)
