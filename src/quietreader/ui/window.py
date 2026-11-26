@@ -3453,7 +3453,11 @@ class MainWindow(QMainWindow):
             status_key = "已更新词条标注：{term}"
         else:
             if len(records) >= MAX_TERM_NOTES:
-                self.set_status("本书词条标注数量已达上限（{limit} 条）。", limit=MAX_TERM_NOTES)
+                self.set_status(
+                    "本书词条标注数量已达上限（{limit} 条）。",
+                    limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
+                )
                 return False
             record = asdict(TermNote(
                 term=clean_term,
@@ -3595,16 +3599,26 @@ class MainWindow(QMainWindow):
                 self.set_status(
                     "已继承 {added} 条并覆盖 {updated} 条词条标注（已达单书 {limit} 条上限）。",
                     added=added, updated=updated, limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
                 )
             elif added:
                 self.set_status(
                     "已继承 {added} 条词条标注（已达单书 {limit} 条上限）。",
                     added=added, limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
                 )
             elif updated:
-                self.set_status("已更新 {updated} 条同名词条标注。", updated=updated)
+                self.set_status(
+                    "已更新 {updated} 条同名词条标注；本书已达单书 {limit} 条上限，未新增词条。",
+                    updated=updated, limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
+                )
             else:
-                self.set_status("本书词条已达上限（{limit} 条），未能新增词条。", limit=MAX_TERM_NOTES)
+                self.set_status(
+                    "本书词条已达上限（{limit} 条），未能新增词条。",
+                    limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
+                )
         elif added and updated:
             self.set_status("已继承 {added} 条词条标注，覆盖 {updated} 条同名词条。", added=added, updated=updated)
         elif added and skipped:
@@ -4458,12 +4472,19 @@ class MainWindow(QMainWindow):
                 return max(44, self.surface.height() - anchor_y + 14)
         return 44
 
-    def set_status(self, source, notify=True, toast_action_text=None, toast_action=None, **values):
+    def set_status(
+        self, source, notify=True, toast_action_text=None, toast_action=None,
+        notify_in_focus=False, **values,
+    ):
         self.status_source = (source, values)
         self.status.setProperty("translation_source", None)
         text = self.t(source, **values)
         self.status.setText(text)
-        if notify and hasattr(self, "toast") and not self.focus_mode and not self.closed and not self._window_hidden:
+        if (
+            notify and hasattr(self, "toast")
+            and (not self.focus_mode or notify_in_focus)
+            and not self.closed and not self._window_hidden
+        ):
             self._toast_status_source = (source, dict(values), toast_action_text, toast_action)
             self.toast.show_message(
                 self._toast_status_text(source, values, toast_action_text),

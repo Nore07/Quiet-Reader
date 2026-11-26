@@ -67,6 +67,7 @@ EN = {
     "已继承 {added} 条词条标注（跳过 {skipped} 条同名）。": "Imported {added} term notes ({skipped} existing skipped).",
     "已继承 {added} 条词条标注，覆盖 {updated} 条同名词条。": "Imported {added} term notes and updated {updated} existing.",
     "已更新 {updated} 条同名词条标注。": "Updated {updated} existing term notes.",
+    "已更新 {updated} 条同名词条标注；本书已达单书 {limit} 条上限，未新增词条。": "Updated {updated} existing term notes; this book is at the {limit}-term limit, so no new terms were added.",
     "所选词条已全部存在，未作修改。": "All selected terms already exist; nothing changed.",
     "已继承 {added} 条词条标注（已达单书 {limit} 条上限）。": "Imported {added} term notes (reached per-book limit of {limit}).",
     "已继承 {added} 条并覆盖 {updated} 条词条标注（已达单书 {limit} 条上限）。": "Imported {added} and updated {updated} term notes (reached per-book limit of {limit}).",
