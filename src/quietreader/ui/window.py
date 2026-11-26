@@ -232,22 +232,16 @@ class _JumpTargetLabel(QLabel):
         else:
             metrics = self.fontMetrics()
             suffix = f" · {self._page_text}" if self._page_text else ""
-            chapter_width = available_width - metrics.horizontalAdvance(suffix)
-            if chapter_width >= 26:
-                chapter = metrics.elidedText(
-                    self._chapter, Qt.TextElideMode.ElideRight, chapter_width,
+            chapter_width = metrics.horizontalAdvance(self._chapter)
+            full_text = f"{self._chapter}{suffix}"
+            if chapter_width > available_width:
+                visible_text = metrics.elidedText(
+                    self._chapter, Qt.TextElideMode.ElideRight, available_width,
                 )
-                visible_text = f"{chapter}{suffix}"
-            elif available_width >= (
-                metrics.horizontalAdvance(self._chapter[:1])
-                + metrics.horizontalAdvance(suffix)
-            ):
-                chapter = metrics.elidedText(
-                    self._chapter, Qt.TextElideMode.ElideRight, chapter_width,
-                ) or self._chapter[:1]
-                visible_text = f"{chapter}{suffix}"
+            elif metrics.horizontalAdvance(full_text) <= available_width:
+                visible_text = full_text
             else:
-                visible_text = ""
+                visible_text = self._chapter
         if visible_text != self.text():
             self.setText(visible_text)
 
