@@ -29,7 +29,11 @@ class WheelPageAccumulator(QObject):
 
     def handle(self, event):
         modifiers = event.modifiers()
-        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.ShiftModifier
+        ):
             self.reset()
             event.accept()
             return
