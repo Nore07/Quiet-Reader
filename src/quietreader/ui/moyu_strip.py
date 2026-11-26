@@ -121,7 +121,8 @@ class MoyuStrip(QWidget):
         self._drag_state = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
-        self.setAccessibleName(tr("摸鱼模式阅读条", self._language))
+        self.setProperty("translation_accessible", "摸鱼模式阅读条")
+        self.setAccessibleName(tr(self.property("translation_accessible"), self._language))
         self.setToolTip(self._interaction_hint(self._language, self._adjust_key))
         self._sync_height()
 
@@ -181,7 +182,7 @@ class MoyuStrip(QWidget):
         self._font_family = font_family
         self._background_color = background_color or ""
         self._palette = colors(theme, self._background_color)
-        self.setAccessibleName(tr("摸鱼模式阅读条", language))
+        self.setAccessibleName(tr(self.property("translation_accessible"), language))
         if language_changed:
             self._render_sentence()
         self.setToolTip(self._interaction_hint(language, self._adjust_key))
