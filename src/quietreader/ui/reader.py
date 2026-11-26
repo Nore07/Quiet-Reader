@@ -1,14 +1,17 @@
 from bisect import bisect_left, bisect_right
 import math
+import re
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, QSizeF, Qt, QTimer, Signal, QUrl
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSizeF, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout, QColor, QFont, QGuiApplication, QKeySequence,
-    QPainter, QPalette, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QImageReader,
+    QPainter, QPalette, QPen, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QImageReader,
 )
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from quietreader.domain.models import Settings
+from quietreader.persistence.store import MAX_TERM_TEXT
+from quietreader.ui.term_notes import compile_term_matcher, find_term_spans
 from quietreader.ui.theme import colors
 from quietreader.i18n import tr
 from quietreader.ui.wheel_navigation import WheelPageAccumulator
@@ -76,6 +79,10 @@ class PageView(QWidget):
     resample_requested = Signal()
     visibility_requested = Signal()
     emergency_requested = Signal()
+    term_hovered = Signal(object, object)
+    term_hover_cleared = Signal()
+    term_note_requested = Signal(str)
+    term_search_requested = Signal(str)
 
     _MAX_SECTION_PAGE_CACHE = 64
 
@@ -97,6 +104,17 @@ class PageView(QWidget):
         self.search_matches: list[tuple[int, int]] = []
         self._search_match_starts: list[int] = []
         self.active_search_match: tuple[int, int] | None = None
+        self._term_notes: list[dict] = []
+        self._term_pattern: re.Pattern | None = None
+        self._term_lookup: dict[str, dict] = {}
+        self._term_spans: list[tuple[int, int, dict]] = []
+        self._term_span_starts: list[int] = []
+        self._pending_hover: tuple[int, int, dict, QRect] | None = None
+        self._active_hover: tuple[int, int, dict] | None = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(140)
+        self._hover_timer.timeout.connect(self._fire_term_hover)
         self._section_page_cache: dict[tuple, tuple[int, ...]] = {}
         self.offset = 0
         self.page = 0
@@ -109,7 +127,7 @@ class PageView(QWidget):
         self.setAccessibleName("阅读正文")
         self.setMinimumSize(160, 140)
         self.setMouseTracking(True)
-        self._wheel_page_accumulator = WheelPageAccumulator(self.turned.emit, self)
+        self._wheel_page_accumulator = WheelPageAccumulator(self._emit_wheel_turn, self)
 
     @staticmethod
     def _decode_section_images(document: QTextDocument, images, parent=None):
@@ -138,6 +156,7 @@ class PageView(QWidget):
 
     def set_text(self, text: str, offset=0, images=None, links=None, formats=None):
         self._resize_reflow_timer.stop()
+        self.clear_term_hover()
         self.text = text
         self._offset_map = _TextOffsetMap(text)
         self.offset = max(0, min(len(text), offset))
@@ -153,7 +172,132 @@ class PageView(QWidget):
         self.active_search_match = None
         self.images = self._decode_section_images(self.document, images, self)
         self.selection = QTextCursor(self.document)
+        self._rebuild_term_spans()
         self.reflow()
+
+    def set_term_notes(self, records):
+        """Compile a single longest-first regex and precompute section term spans."""
+        self.clear_term_hover()
+        self._term_notes, self._term_pattern, self._term_lookup = compile_term_matcher(records)
+        self._rebuild_term_spans()
+        self.update()
+
+    def _rebuild_term_spans(self):
+        spans = find_term_spans(self.text, self._term_pattern, self._term_lookup)
+        self._term_spans = spans
+        self._term_span_starts = [span[0] for span in spans]
+
+    def clear_term_hover(self):
+        had = self._hover_timer.isActive() or self._pending_hover is not None or self._active_hover is not None
+        self._hover_timer.stop()
+        self._pending_hover = None
+        self._active_hover = None
+        if had:
+            self.term_hover_cleared.emit()
+
+    def _has_term_hover(self) -> bool:
+        return self._active_hover is not None or self._pending_hover is not None or self._hover_timer.isActive()
+
+    def _fire_term_hover(self):
+        if self._pending_hover is None or not self.isVisible():
+            return
+        if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+            self.clear_term_hover()
+            return
+        start, end, record, anchor_rect = self._pending_hover
+        self._pending_hover = None
+        self._active_hover = (start, end, record)
+        self.term_hovered.emit(record, anchor_rect)
+
+    def _term_span_at(self, python_pos: int):
+        if not self._term_spans or python_pos < 0:
+            return None
+        idx = bisect_right(self._term_span_starts, python_pos) - 1
+        if idx >= 0:
+            start, end, record = self._term_spans[idx]
+            if start <= python_pos < end:
+                return start, end, record
+        return None
+
+    def _span_widget_rects(self, start_py: int, end_py: int) -> list[QRectF]:
+        if not self.text or end_py <= start_py:
+            return []
+        q_start = self._offset_map.to_qt(start_py)
+        q_end = self._offset_map.to_qt(end_py)
+        if q_end <= q_start:
+            return []
+        pad = self.settings.padding
+        page_top = self.page * self.page_height
+        page_bottom = page_top + self.page_height
+        layout = self.document.documentLayout()
+        rects: list[QRectF] = []
+        block = self.document.findBlock(q_start)
+        while block.isValid() and block.position() < q_end:
+            block_pos = block.position()
+            block_text_len = max(0, block.length() - 1)
+            local_start = max(0, q_start - block_pos)
+            local_end = min(block_text_len, q_end - block_pos)
+            if local_end > local_start:
+                block_rect = layout.blockBoundingRect(block)
+                text_layout = block.layout()
+                for line_idx in range(text_layout.lineCount()):
+                    line = text_layout.lineAt(line_idx)
+                    line_start = line.textStart()
+                    line_end = line_start + line.textLength()
+                    ov_start = max(local_start, line_start)
+                    ov_end = min(local_end, line_end)
+                    if ov_end <= ov_start:
+                        continue
+                    doc_y = block_rect.top() + line.y()
+                    line_h = line.height()
+                    if doc_y + line_h <= page_top or doc_y >= page_bottom:
+                        continue
+                    x1 = line.cursorToX(ov_start)[0]
+                    x2 = line.cursorToX(ov_end)[0]
+                    left, right = (x1, x2) if x1 <= x2 else (x2, x1)
+                    rects.append(QRectF(
+                        left + pad,
+                        doc_y - page_top + pad,
+                        max(2.0, right - left),
+                        max(1.0, line_h),
+                    ))
+            block = block.next()
+        return rects
+
+    def term_span_rect(self, start_py: int, end_py: int) -> QRect | None:
+        """Return the widget-local bounding rect of a visible term span on the current page."""
+        rects = self._span_widget_rects(start_py, end_py)
+        return rects[0].toAlignedRect() if rects else None
+
+    def _term_hit_at_point(self, point: QPointF):
+        if not self.text or not self._term_spans:
+            return None
+        pad = self.settings.padding
+        if (
+            point.x() < pad
+            or point.x() > self.width() - pad
+            or point.y() < pad
+            or point.y() > pad + self.page_height
+        ):
+            return None
+        doc_pt = QPointF(point.x() - pad, point.y() - pad + self.page * self.page_height)
+        raw_hit = self.document.documentLayout().hitTest(doc_pt, Qt.HitTestAccuracy.ExactHit)
+        if raw_hit < 0:
+            return None
+        py_hit = self._offset_map.to_python(raw_hit)
+        candidates = []
+        primary = self._term_span_at(py_hit)
+        if primary is not None:
+            candidates.append(primary)
+        if py_hit > 0:
+            previous = self._term_span_at(py_hit - 1)
+            if previous is not None and previous != primary:
+                candidates.append(previous)
+        for start, end, record in candidates:
+            for rect in self._span_widget_rects(start, end):
+                if rect.adjusted(-1.5, -1.5, 1.5, 1.5).contains(point):
+                    return start, end, record, rect.toAlignedRect()
+        return None
 
     def set_search_highlights(self, matches: list[tuple[int, int]], active_match: tuple[int, int] | None = None):
         self.search_matches = list(matches)
@@ -307,6 +451,7 @@ class PageView(QWidget):
         return page_offsets, image_sizes
 
     def reflow(self):
+        self.clear_term_hover()
         padding = self.settings.padding
         width = max(80, self.width() - padding * 2)
         self.page_height = max(60, self.height() - padding * 2)
@@ -379,6 +524,7 @@ class PageView(QWidget):
         return page_0 + 1
 
     def go_page(self, page):
+        self.clear_term_hover()
         self.page = max(0, min(self.page_count - 1, page))
         self.offset = self.page_offsets[self.page]
         self.selection.clearSelection()
@@ -387,6 +533,80 @@ class PageView(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._resize_reflow_timer.start()
+
+    def _emit_wheel_turn(self, direction):
+        self.clear_term_hover()
+        self.turned.emit(direction)
+
+    def _term_underline_pen(self, palette: dict) -> QPen:
+        is_dark_paper = QColor(palette["paper"]).lightness() < 128
+        if self.focus_mode:
+            if palette.get("custom_background"):
+                color = QColor(palette["ink"])
+                color.setAlpha(190 if is_dark_paper else 180)
+            else:
+                color = QColor(palette["accent"])
+                color.setAlpha(220 if is_dark_paper else 210)
+        else:
+            color = QColor(palette["accent"])
+            color.setAlpha(238 if is_dark_paper else 230)
+        width = max(1.6, round(self.settings.font_size * 0.085, 1))
+        pen = QPen(color, width, Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([3.0, 2.2])
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        return pen
+
+    def _draw_term_underlines(self, painter: QPainter, palette: dict, win_start: int, win_end: int):
+        if not self._term_spans:
+            return
+        first_term = max(0, bisect_right(self._term_span_starts, win_start) - 1)
+        doc_layout = self.document.documentLayout()
+        page_top = self.page * self.page_height
+        page_bottom = page_top + self.page_height
+        painter.save()
+        painter.setPen(self._term_underline_pen(palette))
+        for idx in range(first_term, len(self._term_spans)):
+            t_start, t_end, _record = self._term_spans[idx]
+            if t_start > win_end:
+                break
+            if t_end <= t_start or t_end <= win_start:
+                continue
+            q_start = self._offset_map.to_qt(t_start)
+            q_end = self._offset_map.to_qt(t_end)
+            if q_end <= q_start:
+                continue
+            block = self.document.findBlock(q_start)
+            while block.isValid() and block.position() < q_end:
+                block_pos = block.position()
+                block_text_len = max(0, block.length() - 1)
+                local_start = max(0, q_start - block_pos)
+                local_end = min(block_text_len, q_end - block_pos)
+                if local_end > local_start:
+                    block_rect = doc_layout.blockBoundingRect(block)
+                    text_layout = block.layout()
+                    for line_idx in range(text_layout.lineCount()):
+                        line = text_layout.lineAt(line_idx)
+                        line_start = line.textStart()
+                        line_end = line_start + line.textLength()
+                        ov_start = max(local_start, line_start)
+                        ov_end = min(local_end, line_end)
+                        if ov_end <= ov_start:
+                            continue
+                        line_top = block_rect.top() + line.y()
+                        line_h = line.height()
+                        if line_top + line_h <= page_top or line_top >= page_bottom:
+                            continue
+                        x1 = line.cursorToX(ov_start)[0]
+                        x2 = line.cursorToX(ov_end)[0]
+                        left, right = (x1, x2) if x1 <= x2 else (x2, x1)
+                        if right - left < 1.0:
+                            continue
+                        baseline_y = line_top + line.ascent()
+                        descent = line.descent()
+                        underline_y = min(line_top + line_h - 1.5, baseline_y + max(4.0, descent + 2.0))
+                        painter.drawLine(QPointF(left, underline_y), QPointF(right, underline_y))
+                block = block.next()
+        painter.restore()
 
     def wheelEvent(self, event):
         self._wheel_page_accumulator.handle(event)
@@ -419,16 +639,16 @@ class PageView(QWidget):
         context.clip = QRectF(0, self.page * self.page_height, self.document.pageSize().width(), self.page_height)
         context.palette.setColor(QPalette.ColorRole.Text, QColor(c["ink"]))
         selections = []
+        win_start_page = max(0, self.page - 1)
+        win_start = self.page_offsets[win_start_page]
+        win_end = (
+            self.page_offsets[self.page + 2]
+            if self.page + 2 < self.page_count
+            else len(self.text)
+        )
+        paper_hex = c.get("paper", "").lower()
         if not self.focus_mode and self.search_matches:
-            win_start_page = max(0, self.page - 1)
-            win_start = self.page_offsets[win_start_page]
-            win_end = (
-                self.page_offsets[self.page + 2]
-                if self.page + 2 < self.page_count
-                else len(self.text)
-            )
             first_idx = max(0, bisect_right(self._search_match_starts, win_start) - 1)
-            paper_hex = c.get("paper", "").lower()
             passive_bg = QColor(
                 "#5c4c26" if paper_hex == "#1d2522"
                 else ("#e5c57b" if paper_hex == "#efe4cd" else "#f2dc96")
@@ -463,12 +683,15 @@ class PageView(QWidget):
         if selections:
             context.selections = selections
         self.document.documentLayout().draw(painter, context)
+        if self._term_spans:
+            self._draw_term_underlines(painter, c, win_start, win_end)
 
     def _hit(self, point):
         p = QPointF(point.x() - self.settings.padding, point.y() - self.settings.padding + self.page * self.page_height)
         return max(0, self.document.documentLayout().hitTest(p, Qt.HitTestAccuracy.FuzzyHit))
 
     def mousePressEvent(self, event):
+        self.clear_term_hover()
         if event.button() == Qt.MouseButton.LeftButton:
             self.setFocus()
             hit = self._hit(event.position())
@@ -483,20 +706,83 @@ class PageView(QWidget):
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MouseButton.LeftButton:
+            self.clear_term_hover()
             self.selection.setPosition(self._hit(event.position()), QTextCursor.MoveMode.KeepAnchor)
             self.update()
         else:
             hit = self._offset_map.to_python(self._hit(event.position()))
             clickable = any(link.start <= hit < link.end for link in self.links)
             self.setCursor(Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor)
+            term_hit = self._term_hit_at_point(event.position())
+            if term_hit is None:
+                self.clear_term_hover()
+            else:
+                start, end, record, anchor_rect = term_hit
+                if (
+                    self._active_hover is not None
+                    and self._active_hover[0] == start
+                    and self._active_hover[1] == end
+                    and self._active_hover[2] == record
+                ):
+                    return
+                if self._active_hover is not None:
+                    self._active_hover = None
+                    self.term_hover_cleared.emit()
+                same_pending = (
+                    self._pending_hover is not None
+                    and self._pending_hover[0] == start
+                    and self._pending_hover[1] == end
+                    and self._pending_hover[2] == record
+                )
+                self._pending_hover = (start, end, record, anchor_rect)
+                if not same_pending or not self._hover_timer.isActive():
+                    self._hover_timer.start()
+
+    def leaveEvent(self, event):
+        self.clear_term_hover()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event):
+        self.clear_term_hover()
+        super().hideEvent(event)
+
+    def build_context_menu(self, pos: QPoint) -> QMenu:
+        self.clear_term_hover()
+        lang = self.settings.language
+        menu = QMenu(self)
+        action = menu.addAction(tr("复制选中文字", lang), self.copy)
+        action.setEnabled(self.selection.hasSelection())
+        if self.text:
+            if self.selection.hasSelection():
+                raw_selected = self.selection.selectedText().replace("\u2029", "\n")
+                collapsed = " ".join(raw_selected.replace("\x00", "").split())
+                if 1 <= len(collapsed) <= MAX_TERM_TEXT:
+                    exists = collapsed.casefold() in self._term_lookup
+                    label = tr("编辑词条标注…" if exists else "添加词条标注…", lang)
+                    menu.addSeparator()
+                    menu.addAction(label, lambda t=collapsed: self.term_note_requested.emit(t))
+            else:
+                term_hit = self._term_hit_at_point(QPointF(pos))
+                if term_hit is not None:
+                    term = term_hit[2]["term"]
+                    menu.addSeparator()
+                    menu.addAction(
+                        tr("编辑词条标注：“{term}”", lang, term=term),
+                        lambda t=term: self.term_note_requested.emit(t),
+                    )
+                    if not self.focus_mode:
+                        menu.addAction(
+                            tr("在全书搜索：“{term}”", lang, term=term),
+                            lambda t=term: self.term_search_requested.emit(t),
+                        )
+        if self.focus_mode:
+            menu.addSeparator()
+            menu.addAction(tr("重新采样背景色", lang), self.resample_requested.emit)
+            menu.addAction(tr("退出专注模式", lang), self.exit_focus.emit)
+        return menu
 
     def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        action = menu.addAction(tr("复制选中文字", self.settings.language), self.copy)
-        action.setEnabled(self.selection.hasSelection())
-        if self.focus_mode:
-            menu.addAction(tr("重新采样背景色", self.settings.language), self.resample_requested.emit)
-            menu.addAction(tr("退出专注模式", self.settings.language), self.exit_focus.emit)
+        menu = self.build_context_menu(event.pos())
         menu.exec(event.globalPos())
 
     def copy(self):
@@ -510,8 +796,18 @@ class PageView(QWidget):
         elif sequence == self.settings.hotkey:
             if not event.isAutoRepeat():
                 self.visibility_requested.emit()
-        elif event.key() == Qt.Key.Key_Escape and self.focus_mode:
-            self.exit_focus.emit()
+        elif event.key() == Qt.Key.Key_Escape:
+            if self._has_term_hover():
+                self.clear_term_hover()
+                if self.focus_mode:
+                    self.exit_focus.emit()
+                event.accept()
+                return
+            if self.focus_mode:
+                self.exit_focus.emit()
+                event.accept()
+                return
+            super().keyPressEvent(event)
         elif sequence == self.settings.focus_key:
             if not event.isAutoRepeat():
                 self.focus_requested.emit()

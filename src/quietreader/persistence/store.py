@@ -7,12 +7,31 @@ import shutil
 from quietreader.domain.models import Settings
 
 VERSION = 1
+TERM_NOTES_VERSION = 1
 MAX_BOOKMARKS = 200
 MAX_BOOKMARK_NOTE = 1000
+MAX_TERM_NOTES = 500
+MAX_TERM_TEXT = 60
+MAX_TERM_NOTE = 1000
+MAX_TERM_NOTES_BYTES = 16 * 1024 * 1024
 MAX_BOOK_RECORDS = 500
 MAX_BOOK_TITLE_OVERRIDE = 200
 MAX_JUMP_HISTORY = 30
 MAX_JUMP_HISTORY_BOOKS = 100
+
+
+def normalize_term_text(raw: str) -> str:
+    if not isinstance(raw, str):
+        return ""
+    cleaned = " ".join(raw.replace("\x00", "").split())
+    return cleaned[:MAX_TERM_TEXT].strip()
+
+
+def normalize_term_note(raw: str) -> str:
+    if not isinstance(raw, str):
+        return ""
+    cleaned = raw.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return cleaned[:MAX_TERM_NOTE].strip()
 
 
 def _clean_books(raw):
@@ -102,6 +121,69 @@ def _clean_jump_history(raw):
     return clean
 
 
+def _clean_term_notes(raw):
+    if not isinstance(raw, dict):
+        return {}
+    clean = {}
+    for book_id, records in raw.items():
+        if (
+            not isinstance(book_id, str)
+            or not book_id
+            or "\x00" in book_id
+            or len(book_id) > 100
+            or not isinstance(records, list)
+        ):
+            continue
+        rows = []
+        seen = set()
+        for record in records:
+            if len(rows) >= MAX_TERM_NOTES:
+                break
+            if not isinstance(record, dict):
+                continue
+            raw_term = record.get("term")
+            raw_note = record.get("note")
+            created = record.get("created", "")
+            if (
+                not isinstance(raw_term, str)
+                or not isinstance(raw_note, str)
+                or not isinstance(created, str)
+            ):
+                continue
+            term = normalize_term_text(raw_term)
+            note = normalize_term_note(raw_note)
+            if not term or not note:
+                continue
+            key = term.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({
+                "term": term,
+                "note": note,
+                "created": created.replace("\x00", "")[:40],
+            })
+        if rows:
+            clean[book_id] = rows
+    return clean
+
+
+def _merge_term_notes(primary: dict, fallback: dict) -> dict:
+    merged = _clean_term_notes(primary)
+    for book_id, rows in _clean_term_notes(fallback).items():
+        target = merged.setdefault(book_id, [])
+        seen = {item["term"].casefold() for item in target}
+        for row in rows:
+            if len(target) >= MAX_TERM_NOTES:
+                break
+            key = row["term"].casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            target.append(dict(row))
+    return merged
+
+
 def initial_state():
     return {
         "version": VERSION,
@@ -111,6 +193,7 @@ def initial_state():
         "bookmarks": {},
         "jump_history": {},
         "forward_history": {},
+        "term_notes": {},
         "last_book": "",
         "last_browse_dir": "",
         "last_update_check": 0,
@@ -124,12 +207,61 @@ class StateStore:
     def __init__(self, directory: Path):
         self.path = Path(directory) / "state.json"
         self.backup = self.path.with_suffix(".backup.json")
+        self.term_notes_path = Path(directory) / "term_notes.json"
+        self.term_notes_backup = self.term_notes_path.with_suffix(".backup.json")
         self.warning = ""
         self.read_only = False
+        self.term_notes_warning = ""
+        self.term_notes_read_only = False
         self.state = initial_state()
         self._load()
 
+    def _load_term_notes(self, legacy_term_notes: dict):
+        loaded = False
+        for path in (self.term_notes_path, self.term_notes_backup):
+            if not path.exists():
+                continue
+            try:
+                if path.stat().st_size > MAX_TERM_NOTES_BYTES:
+                    raise ValueError("term_notes too big")
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(value, dict):
+                    raise ValueError("invalid term_notes schema")
+                version = value.get("version", 0)
+                if type(version) is not int or version not in (0, TERM_NOTES_VERSION):
+                    self.term_notes_read_only = True
+                    self.term_notes_warning = "词条标注数据来自不支持的版本。已保护原文件，本次不会保存词条更改。"
+                    if not self.warning:
+                        self.warning = self.term_notes_warning
+                    self.state["term_notes"] = legacy_term_notes
+                    return
+                raw_notes = value.get("term_notes", {})
+                if not isinstance(raw_notes, dict):
+                    raise ValueError("invalid term_notes mapping")
+                sidecar = _clean_term_notes(raw_notes)
+                self.state["term_notes"] = (
+                    _merge_term_notes(sidecar, legacy_term_notes) if legacy_term_notes else sidecar
+                )
+                if path == self.term_notes_backup:
+                    self.term_notes_warning = "上次保存的词条标注数据损坏，已从备份恢复。"
+                    if not self.warning:
+                        self.warning = self.term_notes_warning
+                    if self.term_notes_path.exists():
+                        self.term_notes_path.replace(self.term_notes_path.with_suffix(".damaged.json"))
+                loaded = True
+                break
+            except (OSError, ValueError, TypeError, RecursionError):
+                self.term_notes_warning = "词条标注数据无法读取，已保护原文件，本次不会保存词条更改。"
+        if not loaded:
+            if self.term_notes_path.exists():
+                self.term_notes_read_only = True
+                if not self.warning:
+                    self.warning = self.term_notes_warning
+            self.state["term_notes"] = legacy_term_notes
+
     def _load(self):
+        legacy_term_notes = {}
+        loaded_state = False
         for path in (self.path, self.backup):
             if not path.exists():
                 continue
@@ -154,6 +286,7 @@ class StateStore:
                 clean["bookmarks"] = _clean_bookmarks(value.get("bookmarks", {}))
                 clean["jump_history"] = _clean_jump_history(value.get("jump_history", {}))
                 clean["forward_history"] = _clean_jump_history(value.get("forward_history", {}))
+                legacy_term_notes = _clean_term_notes(value.get("term_notes", {}))
                 clean["last_book"] = value.get("last_book", "") if isinstance(value.get("last_book", ""), str) else ""
                 browse_dir = value.get("last_browse_dir", "")
                 if isinstance(browse_dir, str) and "\x00" not in browse_dir and len(browse_dir) <= 4096:
@@ -176,25 +309,38 @@ class StateStore:
                     self.warning = "上次保存数据损坏，已从备份恢复。"
                     # Keep damaged primary out of the backup rotation.
                     self.path.replace(self.path.with_suffix(".damaged.json")) if self.path.exists() else None
-                return
+                loaded_state = True
+                break
             except (OSError, ValueError, TypeError, RecursionError):
                 self.warning = "保存数据无法读取，已使用默认设置；原文件保留。"
-        if self.path.exists():
+        if not loaded_state and self.path.exists():
             self.read_only = True
+        self._load_term_notes(legacy_term_notes)
+
+    @staticmethod
+    def _atomic_write_json(path: Path, backup: Path, payload: dict):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        with temp.open("w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.exists():
+            backup_temp = backup.with_suffix(".tmp")
+            shutil.copy2(path, backup_temp)
+            os.replace(backup_temp, backup)
+        os.replace(temp, path)
 
     def save(self):
         if self.read_only:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix(".tmp")
         data = deepcopy(self.state)
+        term_notes = _clean_term_notes(data.pop("term_notes", {}))
         data["version"] = VERSION
-        with temp.open("w", encoding="utf-8") as stream:
-            json.dump(data, stream, ensure_ascii=False, indent=2)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if self.path.exists():
-            backup_temp = self.backup.with_suffix(".tmp")
-            shutil.copy2(self.path, backup_temp)
-            os.replace(backup_temp, self.backup)
-        os.replace(temp, self.path)
+        self._atomic_write_json(self.path, self.backup, data)
+        if not self.term_notes_read_only and (self.term_notes_path.exists() or term_notes):
+            self._atomic_write_json(
+                self.term_notes_path,
+                self.term_notes_backup,
+                {"version": TERM_NOTES_VERSION, "term_notes": term_notes},
+            )

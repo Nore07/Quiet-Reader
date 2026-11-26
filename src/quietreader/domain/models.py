@@ -71,6 +71,13 @@ class Bookmark:
 
 
 @dataclass
+class TermNote:
+    term: str
+    note: str
+    created: str = ""
+
+
+@dataclass
 class Position:
     section_id: str = ""
     offset: int = 0

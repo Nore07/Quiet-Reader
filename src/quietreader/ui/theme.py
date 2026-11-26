@@ -9,10 +9,19 @@ def colors(theme, background_color=""):
     return resolve_palette(theme, background_color)
 
 
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    cleaned = hex_color.lstrip("#")
+    return (
+        int(cleaned[0:2], 16),
+        int(cleaned[2:4], 16),
+        int(cleaned[4:6], 16),
+    )
+
+
 def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_highlight=False):
     c = palette
-    paper = c["paper"].lstrip("#")
-    rgb = ",".join(str(int(paper[i:i + 2], 16)) for i in (0, 2, 4))
+    paper_r, paper_g, paper_b = _hex_to_rgb(c["paper"])
+    rgb = f"{paper_r},{paper_g},{paper_b}"
     alpha_percent = alpha * 100 / 255
     elevated = c.get("elevated", c["paper"])
     ink_secondary = c.get("ink_secondary", c["ink"])
@@ -22,6 +31,36 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     on_accent = c.get("on_accent", c["paper"])
     danger = c.get("danger", "#c7463b")
     brand_color = c["ink"] if c.get("custom_background") else c["accent"]
+
+    if borderless:
+        focus_ratio = max(0.0, min(1.0, alpha / 255.0))
+        card_alpha_pct = (0.76 + 0.19 * focus_ratio) * 100.0
+        if c.get("custom_background"):
+            is_dark_paper = (0.2126 * paper_r + 0.7152 * paper_g + 0.0722 * paper_b) < 128.0
+            if is_dark_paper:
+                card_rgb = ",".join(str(round(ch + (255 - ch) * 0.12)) for ch in (paper_r, paper_g, paper_b))
+                term_card_border = "1px solid rgba(255,255,255,16%)"
+                term_card_divider = "rgba(255,255,255,10%)"
+            else:
+                card_rgb = ",".join(str(round(ch * 0.96)) for ch in (paper_r, paper_g, paper_b))
+                term_card_border = "1px solid rgba(0,0,0,14%)"
+                term_card_divider = "rgba(0,0,0,8%)"
+            term_card_bg = f"rgba({card_rgb},{card_alpha_pct:.2f}%)"
+            term_card_title = c["ink"]
+            term_card_body = ink_secondary
+        else:
+            el_rgb = ",".join(str(ch) for ch in _hex_to_rgb(elevated))
+            term_card_bg = f"rgba({el_rgb},{card_alpha_pct:.2f}%)"
+            term_card_border = f"1px solid {line_strong}"
+            term_card_divider = c["line"]
+            term_card_title = c["accent"]
+            term_card_body = ink_secondary
+    else:
+        term_card_bg = elevated
+        term_card_border = f"1px solid {line_strong}"
+        term_card_divider = c["line"]
+        term_card_title = c["accent"]
+        term_card_body = ink_secondary
 
     if resize_outline:
         surface_frame = f"border: 1px dashed {c['accent']}; border-radius: 2px;"
@@ -213,18 +252,18 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
         border: none;
         border-top: 1px solid {c['line']};
     }}
-    QPushButton#sidebarTabBtn {{
+    QPushButton#sidebarTabBtn, QToolButton#sidebarTabBtn {{
         color: {c['muted']};
         background: transparent;
         border: 1px solid transparent;
         border-radius: 7px;
-        padding: 4px 6px;
+        padding: 4px 2px;
         min-height: 24px;
-        font-size: 11px;
+        font-size: 10.5px;
         font-weight: 500;
     }}
-    QPushButton#sidebarTabBtn:hover {{ color: {c['ink']}; background: {accent_hover}; }}
-    QPushButton#sidebarTabBtn:checked {{ color: {c['accent']}; background: {accent_soft}; font-weight: 600; }}
+    QPushButton#sidebarTabBtn:hover, QToolButton#sidebarTabBtn:hover {{ color: {c['ink']}; background: {accent_hover}; }}
+    QPushButton#sidebarTabBtn:checked, QToolButton#sidebarTabBtn:checked {{ color: {c['accent']}; background: {accent_soft}; font-weight: 600; }}
 
     /* Surfaces & typography */
     QWidget#sidebar {{ background: {c['side']}; border: 1px solid {c['line']}; border-radius: {RADIUS_CARD}px; }}
@@ -305,6 +344,14 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     QListWidget::item {{ padding: 10px 8px; border-radius: 6px; }}
     QListWidget::item:selected {{ background: {c['selected']}; color: {c['ink']}; }}
     QListWidget::item:hover {{ background: {accent_hover}; }}
+    QListWidget#termNotesList::item {{ padding: 7px 8px; border-radius: 6px; }}
+    QListWidget#importTermList {{
+        background: {elevated};
+        border: 1px solid {c['line']};
+        border-radius: 8px;
+        padding: 4px;
+    }}
+    QListWidget#importTermList::item {{ padding: 7px 8px; border-radius: 6px; }}
     QListWidget#shelfList {{
         background: transparent;
         border: none;
@@ -490,16 +537,69 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     QScrollArea#preferencesScroll {{ background: {c['paper']}; border: 1px solid {c['line']}; border-radius: 8px; }}
     QWidget#preferencesContent, QWidget#preferencesViewport {{ background: {c['paper']}; }}
     QComboBox QAbstractItemView {{ background: {elevated}; color: {c['ink']}; selection-background-color: {c['selected']}; selection-color: {c['ink']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 4px; outline: 0; }}
-    QComboBox, QSpinBox, QDoubleSpinBox, QFontComboBox, QLineEdit {{
+    QComboBox, QSpinBox, QDoubleSpinBox, QFontComboBox, QLineEdit, QPlainTextEdit {{
         background: {elevated};
         border: 1px solid {c['line']};
         border-radius: {RADIUS_CONTROL}px;
         padding: 5px 9px;
         min-height: 22px;
     }}
-    QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QFontComboBox:hover, QLineEdit:hover {{ border-color: {line_strong}; }}
-    QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QFontComboBox:focus, QLineEdit:focus {{ border-color: {c['accent']}; }}
-    QCheckBox {{ padding: 5px 0; }}
+    QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QFontComboBox:hover, QLineEdit:hover, QPlainTextEdit:hover {{ border-color: {line_strong}; }}
+    QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QFontComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{ border-color: {c['accent']}; }}
+    QLineEdit:read-only {{
+        background: {c['side']};
+        color: {c['muted']};
+        border-color: {c['line']};
+    }}
+    QLineEdit:read-only:hover, QLineEdit:read-only:focus {{ border-color: {c['line']}; }}
+    QPushButton#dangerAction {{
+        color: {danger};
+        background: transparent;
+        border: 1px solid {c['line']};
+    }}
+    QPushButton#dangerAction:hover {{
+        color: #ffffff;
+        background: {danger};
+        border-color: {danger};
+    }}
+
+    /* Floating term note hover preview card */
+    QFrame#termHoverCard {{
+        background: {term_card_bg};
+        border: {term_card_border};
+        border-radius: 10px;
+    }}
+    QLabel#termHoverTitle {{
+        color: {term_card_title};
+        background: transparent;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QFrame#termHoverDivider {{
+        background: {term_card_divider};
+        border: none;
+    }}
+    QLabel#termHoverBody {{
+        color: {term_card_body};
+        background: transparent;
+        font-size: 12px;
+    }}
+    QCheckBox, QRadioButton {{ color: {c['ink']}; padding: 4px 0; spacing: 7px; }}
+    QRadioButton::indicator {{
+        width: 14px;
+        height: 14px;
+        border-radius: 8px;
+        border: 1.5px solid {line_strong};
+        background: {elevated};
+    }}
+    QRadioButton::indicator:hover {{ border-color: {c['accent']}; }}
+    QRadioButton::indicator:checked {{
+        width: 8px;
+        height: 8px;
+        border-radius: 8px;
+        border: 4px solid {c['accent']};
+        background: {on_accent};
+    }}
     QToolTip {{ background: {elevated}; color: {c['ink']}; border: 1px solid {line_strong}; border-radius: 6px; padding: 4px 8px; }}
     QMenu {{ background: {elevated}; color: {c['ink']}; border: 1px solid {line_strong}; border-radius: 8px; padding: 5px; }}
     QMenu::item {{ color: {c['ink']}; background: transparent; padding: 7px 24px 7px 10px; border-radius: 5px; }}
@@ -524,13 +624,15 @@ def stylesheet(palette, alpha=255, borderless=False, resize_outline=False, drop_
     QTreeView#fileDialogView::item:hover {{ background: {accent_hover}; }}
     QTreeView#fileDialogView QHeaderView::section {{ background: {c['side']}; color: {c['muted']}; border: none; border-bottom: 1px solid {c['line']}; padding: 9px 10px 6px 10px; font-weight: 600; }}
     QTreeView#fileDialogView QHeaderView::section:hover {{ color: {c['ink']}; background: {accent_hover}; }}
-    QComboBox#fileFilterCombo {{ background: {c['side']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 6px 32px 6px 10px; min-height: 24px; }}
-    QComboBox#fileFilterCombo:hover {{ background: {accent_hover}; border-color: {line_strong}; }}
-    QComboBox#fileFilterCombo:focus {{ border-color: {c['accent']}; }}
-    QComboBox#fileFilterCombo::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 28px; border: none; border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
-    QComboBox#fileFilterCombo::drop-down:hover {{ background: {c['selected']}; }}
+    QComboBox#fileFilterCombo, QComboBox#importSourceCombo {{ background: {elevated}; border: 1px solid {c['line']}; border-radius: {RADIUS_CONTROL}px; padding: 5px 30px 5px 10px; min-height: 22px; }}
+    QComboBox#fileFilterCombo {{ background: {c['side']}; border-radius: 8px; padding: 6px 32px 6px 10px; min-height: 24px; }}
+    QComboBox#fileFilterCombo:hover, QComboBox#importSourceCombo:hover {{ background: {accent_hover}; border-color: {line_strong}; }}
+    QComboBox#fileFilterCombo:focus, QComboBox#importSourceCombo:focus {{ border-color: {c['accent']}; }}
+    QComboBox#fileFilterCombo::drop-down, QComboBox#importSourceCombo::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 28px; border: none; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }}
+    QComboBox#fileFilterCombo::drop-down:hover, QComboBox#importSourceCombo::drop-down:hover {{ background: {c['selected']}; }}
     QComboBox#fileFilterCombo::down-arrow {{ image: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid {c['muted']}; margin-top: 2px; }}
-    QComboBox#fileFilterCombo QAbstractItemView {{ background: {elevated}; color: {c['ink']}; selection-background-color: {c['selected']}; selection-color: {c['ink']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 4px; outline: 0; }}
+    QComboBox#importSourceCombo::down-arrow {{ image: none; width: 0; height: 0; border: none; }}
+    QComboBox#fileFilterCombo QAbstractItemView, QComboBox#importSourceCombo QAbstractItemView {{ background: {elevated}; color: {c['ink']}; selection-background-color: {c['selected']}; selection-color: {c['ink']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 4px; outline: 0; }}
 
     /* Toast notice */
     QFrame#toastNotice {{ background: {elevated}; border: 1px solid {c['accent']}; border-radius: 10px; }}

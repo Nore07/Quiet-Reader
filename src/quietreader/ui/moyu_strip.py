@@ -1,10 +1,11 @@
 """Minimal status-bar-like reader surface used by Moyu mode."""
 
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen, QTextLayout, QTextOption
-from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QSizePolicy, QWidget
 
 from quietreader.i18n import tr
+from quietreader.ui.term_notes import compile_term_matcher, find_term_spans
 from quietreader.ui.theme import colors
 from quietreader.ui.wheel_navigation import WheelPageAccumulator
 
@@ -86,15 +87,28 @@ class MoyuStrip(QWidget):
     exit_requested = Signal()
     context_menu_opened = Signal()
     context_menu_closed = Signal()
+    term_hovered = Signal(object, object)
+    term_hover_cleared = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._wheel_page_accumulator = WheelPageAccumulator(self.turn_requested.emit, self)
+        self._wheel_page_accumulator = WheelPageAccumulator(self._emit_wheel_turn, self)
         self._source_sentence = ""
         self._source_offset = 0
         self._display_source_offsets = []
+        self._placeholder_mask: list[bool] = []
         self._qt_to_python = [0]
         self._sentence = ""
+        self._term_notes: list[dict] = []
+        self._term_pattern = None
+        self._term_lookup: dict[str, dict] = {}
+        self._term_spans: list[tuple[int, int, dict]] = []
+        self._pending_hover = None
+        self._active_hover = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(140)
+        self._hover_timer.timeout.connect(self._fire_term_hover)
         self._line_count = 1
         self._language = "system"
         self._adjust_key = "Alt"
@@ -156,7 +170,10 @@ class MoyuStrip(QWidget):
         self, *, lines: int, theme: str, language: str, font_family: str,
         adjust_key: str = "Alt", background_color="",
     ):
-        self._line_count = 1 if lines == 1 else 2
+        new_lines = 1 if lines == 1 else 2
+        if new_lines != self._line_count:
+            self.clear_term_hover()
+        self._line_count = new_lines
         self._theme = theme
         language_changed = language != self._language
         self._language = language
@@ -170,6 +187,48 @@ class MoyuStrip(QWidget):
         self.setToolTip(self._interaction_hint(language, self._adjust_key))
         self._sync_height()
         self.update()
+
+    def set_term_notes(self, records):
+        self.clear_term_hover()
+        self._term_notes, self._term_pattern, self._term_lookup = compile_term_matcher(records)
+        self._rebuild_term_spans()
+        self.update()
+
+    def _rebuild_term_spans(self):
+        self._term_spans = find_term_spans(
+            self._sentence,
+            self._term_pattern,
+            self._term_lookup,
+            excluded_mask=self._placeholder_mask,
+        )
+
+    def clear_term_hover(self):
+        had = self._hover_timer.isActive() or self._pending_hover is not None or self._active_hover is not None
+        self._hover_timer.stop()
+        self._pending_hover = None
+        self._active_hover = None
+        if had:
+            self.term_hover_cleared.emit()
+
+    def _emit_wheel_turn(self, direction):
+        self.clear_term_hover()
+        self.turn_requested.emit(direction)
+
+    def _fire_term_hover(self):
+        if self._pending_hover is None or not self.isVisible():
+            return
+        if (
+            self.interaction_active
+            or self.adjustment_key_is_pressed()
+            or (QApplication.mouseButtons() & Qt.MouseButton.LeftButton)
+        ):
+            self.clear_term_hover()
+            return
+        start, end, record, local_rect = self._pending_hover
+        self._pending_hover = None
+        self._active_hover = (start, end, record)
+        global_rect = QRect(self.mapToGlobal(local_rect.topLeft()), local_rect.size())
+        self.term_hovered.emit(record, global_rect)
 
     def set_background_color(self, background_color=""):
         background_color = background_color or ""
@@ -194,18 +253,22 @@ class MoyuStrip(QWidget):
         self.update()
 
     def set_sentence(self, sentence: str, *, source_offset: int = 0):
+        self.clear_term_hover()
         self._source_sentence = sentence or ""
         self._source_offset = max(0, int(source_offset))
         self._render_sentence()
 
     def _render_sentence(self):
+        self.clear_term_hover()
         illustration_label = tr("(此处有插图)", self._language)
         rendered = []
         source_offsets = []
+        placeholder_mask = []
 
-        def append(character, source_index):
+        def append(character, source_index, *, is_placeholder=False):
             rendered.append(character)
             source_offsets.append(source_index)
+            placeholder_mask.append(is_placeholder)
 
         def append_space(source_index):
             if rendered and not rendered[-1].isspace():
@@ -219,7 +282,11 @@ class MoyuStrip(QWidget):
             if character == "\ufffc":
                 append_space(absolute_index)
                 for label_index, label_character in enumerate(illustration_label):
-                    append(label_character, absolute_index if label_index == 0 else absolute_index + 1)
+                    append(
+                        label_character,
+                        absolute_index if label_index == 0 else absolute_index + 1,
+                        is_placeholder=True,
+                    )
                 if index + 1 < len(source) and not source[index + 1].isspace():
                     append_space(absolute_index + 1)
                 index += 1
@@ -235,12 +302,14 @@ class MoyuStrip(QWidget):
 
         self._sentence = "".join(rendered)
         self._display_source_offsets = source_offsets
+        self._placeholder_mask = placeholder_mask
         qt_to_python = [0]
         for python_index, character in enumerate(self._sentence):
             if ord(character) > 0xFFFF:
                 qt_to_python.append(python_index)
             qt_to_python.append(python_index + 1)
         self._qt_to_python = qt_to_python
+        self._rebuild_term_spans()
         self.update()
 
     def _overflow_start(self):
@@ -263,11 +332,12 @@ class MoyuStrip(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def _layout_lines(self):
-        text_rect = self.rect().adjusted(12, 3, -12, -3)
+        v_pad = 2 if self._line_count > 1 else 3
+        text_rect = self.rect().adjusted(12, v_pad, -12, -v_pad)
         font = QFont(self._font_family)
         font.setPixelSize(12)
         if not self._sentence:
-            return font, [], None
+            return font, [], None, []
 
         option = QTextOption()
         option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
@@ -284,15 +354,29 @@ class MoyuStrip(QWidget):
         layout.endLayout()
 
         metrics = QFontMetrics(font)
-        total_height = len(ranges) * metrics.height()
-        baseline = text_rect.top() + max(0, (text_rect.height() - total_height) / 2) + metrics.ascent()
+        line_h = metrics.height()
+        line_gap = 0
+        if len(ranges) > 1:
+            spare = text_rect.height() - len(ranges) * line_h
+            if spare >= 4:
+                line_gap = 4
+            elif spare >= 3:
+                line_gap = 3
+            elif spare >= 2:
+                line_gap = 2
+        line_step = line_h + line_gap
+        total_height = len(ranges) * line_h + max(0, len(ranges) - 1) * line_gap
+        top_offset = text_rect.top() + max(0.0, (text_rect.height() - total_height) / 2.0)
+        baseline = top_offset + metrics.ascent()
         drawn_lines = []
+        term_segments = []
         overflow_start = None
         for row, (start, count) in enumerate(ranges):
             qt_end = start + count
             python_start = self._python_index_for_qt(start)
             python_end = self._python_index_for_qt(qt_end)
             raw_segment = self._sentence[python_start:python_end]
+            leading_whitespace = len(raw_segment) - len(raw_segment.lstrip())
             segment = raw_segment.strip()
             has_more = row == len(ranges) - 1 and bool(self._sentence[python_end:].strip())
             if has_more:
@@ -300,10 +384,74 @@ class MoyuStrip(QWidget):
                     segment + "…", Qt.TextElideMode.ElideRight, int(text_rect.width()),
                 )
                 visible_segment = segment[:-1] if segment.endswith("…") else segment
-                leading_whitespace = len(raw_segment) - len(raw_segment.lstrip())
                 overflow_start = python_start + leading_whitespace + len(visible_segment)
-            drawn_lines.append((segment, QPointF(text_rect.left(), baseline + row * metrics.height())))
-        return font, drawn_lines, overflow_start
+            else:
+                visible_segment = segment
+            line_baseline = baseline + row * line_step
+            drawn_lines.append((segment, QPointF(text_rect.left(), line_baseline)))
+
+            if self._term_spans and visible_segment:
+                vis_start = python_start + leading_whitespace
+                vis_end = vis_start + len(visible_segment)
+                underline_y = min(
+                    float(self.height()) - 1.5,
+                    line_baseline + max(2.5, metrics.descent() + 1.2),
+                )
+                if row < len(ranges) - 1:
+                    next_line_top = top_offset + (row + 1) * line_step
+                    underline_y = min(underline_y, next_line_top - 1.2)
+                for span_start, span_end, record in self._term_spans:
+                    if span_end <= vis_start:
+                        continue
+                    if span_start >= vis_end:
+                        break
+                    ov_start = max(span_start, vis_start)
+                    ov_end = min(span_end, vis_end)
+                    if ov_end <= ov_start:
+                        continue
+                    prefix = visible_segment[:ov_start - vis_start]
+                    matched = visible_segment[ov_start - vis_start:ov_end - vis_start]
+                    x1 = float(text_rect.left() + metrics.horizontalAdvance(prefix))
+                    x2 = float(text_rect.left() + metrics.horizontalAdvance(prefix + matched))
+                    if x2 - x1 < 1.0:
+                        continue
+                    hit_top = line_baseline - metrics.ascent()
+                    hit_rect = QRectF(x1, hit_top, max(2.0, x2 - x1), max(1.0, (underline_y + 1.5) - hit_top))
+                    term_segments.append((x1, x2, underline_y, hit_rect, record, span_start, span_end))
+        return font, drawn_lines, overflow_start, term_segments
+
+    def _term_underline_pen(self) -> QPen:
+        is_dark = QColor(self._palette["paper"]).lightness() < 128
+        if self._background_color or self._palette.get("custom_background"):
+            color = QColor(self._palette["ink"])
+            color.setAlpha(195 if is_dark else 185)
+        else:
+            color = QColor(self._palette["accent"])
+            color.setAlpha(230)
+        pen = QPen(color, 1.5, Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([2.6, 2.0])
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        return pen
+
+    def _term_hit_at_point(self, point: QPointF):
+        if not self._term_spans or not self._sentence:
+            return None
+        _font, _drawn_lines, _overflow_start, term_segments = self._layout_lines()
+        for _x1, _x2, _uy, hit_rect, record, span_start, span_end in term_segments:
+            if hit_rect.adjusted(-1.5, -1.5, 1.5, 1.5).contains(point):
+                return span_start, span_end, record, hit_rect.toAlignedRect()
+        return None
+
+    def term_span_rect(self, term: str) -> QRect | None:
+        """Return the widget-local hit rect of the first visible occurrence of a term."""
+        key = (term or "").strip().casefold()
+        if not key or not self._term_spans:
+            return None
+        _font, _drawn_lines, _overflow_start, term_segments = self._layout_lines()
+        for _x1, _x2, _uy, hit_rect, record, _span_start, _span_end in term_segments:
+            if record.get("term", "").casefold() == key:
+                return hit_rect.toAlignedRect()
+        return None
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -312,11 +460,17 @@ class MoyuStrip(QWidget):
         background_color = QColor(background)
         background_color.setAlpha(round(self._background_opacity * 255))
         painter.fillRect(self.rect(), background_color)
-        font, drawn_lines, _overflow_start = self._layout_lines()
+        font, drawn_lines, _overflow_start, term_segments = self._layout_lines()
         painter.setFont(font)
         painter.setPen(QColor(self._palette.get("ink_secondary", self._palette["muted"])))
         for segment, baseline in drawn_lines:
             painter.drawText(baseline, segment)
+        if term_segments:
+            painter.save()
+            painter.setPen(self._term_underline_pen())
+            for x1, x2, underline_y, _hit_rect, _record, _s, _e in term_segments:
+                painter.drawLine(QPointF(x1, underline_y), QPointF(x2, underline_y))
+            painter.restore()
         if self._adjust_outline:
             sampled_background = QColor(background)
             hue, _saturation, _value, _alpha = sampled_background.getHsv()
@@ -418,6 +572,7 @@ class MoyuStrip(QWidget):
 
     def cancel_interaction(self):
         self._drag_state = None
+        self.clear_term_hover()
         self.unsetCursor()
 
     def adjustment_key_is_pressed(self, event=None):
@@ -430,7 +585,23 @@ class MoyuStrip(QWidget):
             return True
         return bool(QGuiApplication.queryKeyboardModifiers() & modifier)
 
+    def event(self, ev):
+        if ev.type() == QEvent.Type.ToolTip:
+            if self._term_hit_at_point(QPointF(ev.pos())) is not None:
+                ev.accept()
+                return True
+        return super().event(ev)
+
+    def leaveEvent(self, event):
+        self.clear_term_hover()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event):
+        self.clear_term_hover()
+        super().hideEvent(event)
+
     def mousePressEvent(self, event):
+        self.clear_term_hover()
         if event.button() == Qt.MouseButton.LeftButton and self.adjustment_key_is_pressed(event):
             window = self.window()
             global_position = event.globalPosition().toPoint()
@@ -457,6 +628,7 @@ class MoyuStrip(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._drag_state is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.clear_term_hover()
             if not self.adjustment_key_is_pressed(event):
                 self.cancel_interaction()
                 event.accept()
@@ -475,10 +647,38 @@ class MoyuStrip(QWidget):
             return
         if event.buttons() == Qt.MouseButton.NoButton:
             if self.adjustment_key_is_pressed(event):
+                self.clear_term_hover()
                 edges = self._resize_edges_at(event.position().toPoint())
                 self.setCursor(self._resize_cursor(edges) if edges else Qt.CursorShape.SizeAllCursor)
             else:
                 self.unsetCursor()
+                term_hit = self._term_hit_at_point(event.position())
+                if term_hit is None:
+                    self.clear_term_hover()
+                else:
+                    start, end, record, anchor_rect = term_hit
+                    if (
+                        self._active_hover is not None
+                        and self._active_hover[0] == start
+                        and self._active_hover[1] == end
+                        and self._active_hover[2] == record
+                    ):
+                        super().mouseMoveEvent(event)
+                        return
+                    if self._active_hover is not None:
+                        self._active_hover = None
+                        self.term_hover_cleared.emit()
+                    same_pending = (
+                        self._pending_hover is not None
+                        and self._pending_hover[0] == start
+                        and self._pending_hover[1] == end
+                        and self._pending_hover[2] == record
+                    )
+                    self._pending_hover = (start, end, record, anchor_rect)
+                    if not same_pending or not self._hover_timer.isActive():
+                        self._hover_timer.start()
+        else:
+            self.clear_term_hover()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -489,6 +689,7 @@ class MoyuStrip(QWidget):
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event):
+        self.clear_term_hover()
         menu = QMenu(self)
         menu.addAction(tr("上一句", self._language), lambda: self.turn_requested.emit(-1))
         menu.addAction(tr("下一句", self._language), lambda: self.turn_requested.emit(1))
