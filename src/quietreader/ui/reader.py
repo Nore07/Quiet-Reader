@@ -85,6 +85,7 @@ class PageView(QWidget):
     term_search_requested = Signal(str)
 
     _MAX_SECTION_PAGE_CACHE = 64
+    _REFLOW_ANCHOR_COOLDOWN_MS = 5000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,6 +93,14 @@ class PageView(QWidget):
         self._resize_reflow_timer.setSingleShot(True)
         self._resize_reflow_timer.setInterval(160)
         self._resize_reflow_timer.timeout.connect(self.reflow)
+        self._reflow_anchor_marker_timer = QTimer(self)
+        self._reflow_anchor_marker_timer.setSingleShot(True)
+        self._reflow_anchor_marker_timer.timeout.connect(self._clear_reflow_anchor_marker)
+        self._reflow_anchor_marker_offset: int | None = None
+        self._reflow_anchor_marker_rects: list[QRectF] = []
+        self._reflow_anchor_marker_status: str | None = None
+        self._pending_reflow_anchor: int | None = None
+        self._layout_size: tuple[int, int] | None = None
         self.settings = Settings()
         self.focus_mode = False
         self.focus_background_override = ""
@@ -156,6 +165,8 @@ class PageView(QWidget):
 
     def set_text(self, text: str, offset=0, images=None, links=None, formats=None):
         self._resize_reflow_timer.stop()
+        self._clear_reflow_anchor_marker()
+        self._pending_reflow_anchor = None
         self.clear_term_hover()
         self.text = text
         self._offset_map = _TextOffsetMap(text)
@@ -173,7 +184,7 @@ class PageView(QWidget):
         self.images = self._decode_section_images(self.document, images, self)
         self.selection = QTextCursor(self.document)
         self._rebuild_term_spans()
-        self.reflow()
+        self.reflow(anchor_offset=self.offset)
 
     def set_term_notes(self, records):
         """Compile a single longest-first regex and precompute section term spans."""
@@ -314,9 +325,34 @@ class PageView(QWidget):
         return self.focus_background_override or self.settings.background_color
 
     def apply_settings(self, settings):
+        layout_changed = any(
+            getattr(self.settings, name) != getattr(settings, name)
+            for name in (
+                "font_family",
+                "font_size",
+                "line_height",
+                "letter_spacing",
+                "paragraph_spacing",
+                "padding",
+            )
+        )
+        pending_anchor = self._pending_reflow_anchor
+        marked_anchor = self._active_reflow_anchor()
+        if pending_anchor is not None:
+            anchor_offset = pending_anchor
+            align_offset = True
+        elif marked_anchor is not None:
+            anchor_offset = marked_anchor
+            align_offset = True
+        elif layout_changed:
+            anchor_offset = self._current_page_start_offset()
+            align_offset = True
+        else:
+            anchor_offset = self.offset
+            align_offset = False
         self._resize_reflow_timer.stop()
         self.settings = settings
-        self.reflow()
+        self.reflow(anchor_offset=anchor_offset, align_offset=align_offset)
 
     def _layout_document_pages(
         self,
@@ -450,8 +486,106 @@ class PageView(QWidget):
         ]
         return page_offsets, image_sizes
 
-    def reflow(self):
+    def _current_page_start_offset(self) -> int:
+        if not self.page_offsets:
+            return self.offset
+        page = min(max(0, self.page), len(self.page_offsets) - 1)
+        return self.page_offsets[page]
+
+    def _active_reflow_anchor(self) -> int | None:
+        if self._reflow_anchor_marker_timer.isActive():
+            return self._reflow_anchor_marker_offset
+        return None
+
+    def _clear_reflow_anchor_marker(self):
+        self._reflow_anchor_marker_timer.stop()
+        self._reflow_anchor_marker_offset = None
+        self._reflow_anchor_marker_rects = []
+        self._reflow_anchor_marker_status = None
+        self.update()
+
+    def _show_reflow_anchor_marker(self, anchor_offset: int):
+        self._reflow_anchor_marker_offset = anchor_offset
+        self._reflow_anchor_marker_rects = []
+        self._reflow_anchor_marker_status = None
+
+        page_start = self.page_offsets[self.page]
+        page_end = self.page_offsets[self.page + 1] if self.page + 1 < self.page_count else len(self.text)
+        if not page_start <= anchor_offset < page_end:
+            self._reflow_anchor_marker_status = "锚点不在本页"
+        else:
+            marker_start = anchor_offset
+            while marker_start < page_end and self.text[marker_start].isspace():
+                marker_start += 1
+            if marker_start >= page_end:
+                self._reflow_anchor_marker_status = "页首内容未显示"
+            else:
+                marker_end = marker_start
+                while (
+                    marker_end < page_end
+                    and marker_end - marker_start < 8
+                    and not self.text[marker_end].isspace()
+                ):
+                    marker_end += 1
+                if marker_end == marker_start:
+                    marker_end = min(page_end, marker_start + 1)
+                self._reflow_anchor_marker_rects = self._span_widget_rects(marker_start, marker_end)
+                if not self._reflow_anchor_marker_rects:
+                    self._reflow_anchor_marker_status = "页首内容未显示"
+
+        self._reflow_anchor_marker_timer.start(self._REFLOW_ANCHOR_COOLDOWN_MS)
+        self.update()
+
+    def _draw_reflow_anchor_marker(self, painter: QPainter, palette: dict):
+        if self._reflow_anchor_marker_offset is None:
+            return
+        pad = self.settings.padding
+        page_top = self.page * self.page_height
+        if self._reflow_anchor_marker_rects:
+            paper = QColor(palette.get("paper", "#ffffff"))
+            marker_color = QColor("#9e2a2b" if paper.lightness() >= 128 else "#ffd166")
+            marker_width = max(2.2, round(self.settings.font_size * 0.12, 1))
+            painter.save()
+            painter.setPen(QPen(marker_color, marker_width, Qt.PenStyle.SolidLine))
+            for rect in self._reflow_anchor_marker_rects:
+                underline_y = rect.bottom() + page_top - pad - 2.0
+                painter.drawLine(
+                    QPointF(rect.left() - pad, underline_y),
+                    QPointF(rect.right() - pad, underline_y),
+                )
+            painter.restore()
+            return
+
+        available_width = max(1, self.width() - pad * 2 - 16)
+        status_rect = QRectF(8, page_top + 8, min(150, available_width), 24)
+        painter.save()
+        painter.fillRect(status_rect, QColor("#9e2a2b"))
+        painter.setPen(QColor("#ffffff"))
+        status_font = QFont(self.settings.font_family)
+        status_font.setPixelSize(max(10, min(13, self.settings.font_size)))
+        painter.setFont(status_font)
+        painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, self._reflow_anchor_marker_status or "页首内容未显示")
+        painter.restore()
+
+    def reflow(self, anchor_offset=None, *, align_offset=False):
         self.clear_term_hover()
+        marked_anchor = self._active_reflow_anchor()
+        show_anchor_marker = (
+            align_offset
+            or self._pending_reflow_anchor is not None
+            or (anchor_offset is None and marked_anchor is not None)
+        )
+        if anchor_offset is None:
+            if self._pending_reflow_anchor is not None:
+                anchor_offset = self._pending_reflow_anchor
+                align_offset = True
+            elif marked_anchor is not None:
+                anchor_offset = marked_anchor
+                align_offset = True
+            else:
+                anchor_offset = self.offset
+        anchor_offset = max(0, min(len(self.text), int(anchor_offset)))
+        self._pending_reflow_anchor = None
         padding = self.settings.padding
         width = max(80, self.width() - padding * 2)
         self.page_height = max(60, self.height() - padding * 2)
@@ -466,9 +600,29 @@ class PageView(QWidget):
         )
         self.page_count = len(page_offsets)
         self.page_offsets = page_offsets
-        self.page = min(self.page_count - 1, max(0, bisect_right(self.page_offsets, self.offset) - 1))
+        self.page = min(self.page_count - 1, max(0, bisect_right(self.page_offsets, anchor_offset) - 1))
+        if align_offset:
+            self.offset = self.page_offsets[self.page]
+        if show_anchor_marker and self.text:
+            self._show_reflow_anchor_marker(anchor_offset)
+        self._layout_size = (width, self.page_height)
         self.update()
         self.reflowed.emit()
+
+    def flush_pending_reflow(self):
+        padding = self.settings.padding
+        layout_size = (
+            max(80, self.width() - padding * 2),
+            max(60, self.height() - padding * 2),
+        )
+        if self._resize_reflow_timer.isActive() or self._layout_size != layout_size:
+            if self._pending_reflow_anchor is None:
+                marked_anchor = self._active_reflow_anchor()
+                self._pending_reflow_anchor = (
+                    marked_anchor if marked_anchor is not None else self._current_page_start_offset()
+                )
+            self._resize_reflow_timer.stop()
+            self.reflow()
 
     def page_for_section_offset(
         self,
@@ -525,6 +679,7 @@ class PageView(QWidget):
 
     def go_page(self, page):
         self.clear_term_hover()
+        self._clear_reflow_anchor_marker()
         self.page = max(0, min(self.page_count - 1, page))
         self.offset = self.page_offsets[self.page]
         self.selection.clearSelection()
@@ -532,6 +687,11 @@ class PageView(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if not self._resize_reflow_timer.isActive():
+            marked_anchor = self._active_reflow_anchor()
+            self._pending_reflow_anchor = (
+                marked_anchor if marked_anchor is not None else self._current_page_start_offset()
+            )
         self._resize_reflow_timer.start()
 
     def _emit_wheel_turn(self, direction):
@@ -685,6 +845,7 @@ class PageView(QWidget):
         self.document.documentLayout().draw(painter, context)
         if self._term_spans:
             self._draw_term_underlines(painter, c, win_start, win_end)
+        self._draw_reflow_anchor_marker(painter, c)
 
     def _hit(self, point):
         p = QPointF(point.x() - self.settings.padding, point.y() - self.settings.padding + self.page * self.page_height)
