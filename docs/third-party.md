@@ -6,7 +6,7 @@ QuietReader 自编代码采用 Apache-2.0 许可，完整文本见仓库根目�
 | --- | --- | --- |
 | CPython 3.12.10 | 冻结应用运行时 | PSF-2.0，许可文本随软件包提供；见 [CPython 上游](https://github.com/python/cpython/tree/v3.12.10) |
 | PySide6 Essentials 6.12.0 / shiboken6 6.12.0 | 桌面窗口与文字布局 | 上游元数据为 `LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only`；本发行包按 LGPL-3.0-only 选项提供动态库，见 [Qt for Python 许可说明](https://doc.qt.io/qtforpython-6/licenses.html) |
-| PySide6 Addons 6.12.0 / Qt PDF | PDF 文字提取与页面渲染 | Qt PDF 按 LGPL-3.0 或 GPL-2.0 提供，并包含 PDFium（BSD）及其第三方组件；发行时保留 Addons wheel 和 Qt PDF 随附的许可文件，见 [Qt PDF 许可说明](https://doc.qt.io/qt-6/qtpdf-licensing.html) |
+| PySide6 Addons 6.12.0 / Qt PDF | PDF 文字提取与页面渲染 | Addons 动态库按 LGPL-3.0-only 选项提供；Qt PDF 按 LGPL-3.0 或 GPL-2.0 提供，并包含 PDFium（BSD）及其第三方组件。发行时保留 Addons wheel 和 Qt PDF 随附的许可文件，见 [Qt for Python 许可说明](https://doc.qt.io/qtforpython-6/licenses.html) 与 [Qt PDF 许可说明](https://doc.qt.io/qt-6/qtpdf-licensing.html) |
 | charset-normalizer 3.5.2 | 文本编码识别 | MIT，见 [上游项目](https://github.com/jawah/charset_normalizer) |
 | defusedxml 0.7.1 | 安全解析 EPUB XML | PSFL，见 [上游项目](https://github.com/tiran/defusedxml) |
 | PyInstaller 6.22.3 bootloader | 冻结应用启动器 | GPLv2-or-later，并附带允许将 bootloader 合并分发的例外；见上游 [`COPYING.txt`](https://github.com/pyinstaller/pyinstaller/blob/v6.22.3/COPYING.txt) |
