@@ -1436,7 +1436,7 @@ class MainWindow(QMainWindow):
         self._themed_controls.append(self.progress)
         reading.addWidget(self.progress)
 
-        # Compact footer keeps chapter status and jump-back action on one line.
+        # Compact footer keeps page status and navigation actions on one line.
         self.reader_navigation = QWidget()
         self.reader_navigation.setObjectName("readerNavigation")
         self.reader_navigation_layout = QHBoxLayout(self.reader_navigation)
@@ -1490,15 +1490,15 @@ class MainWindow(QMainWindow):
         self.footer_book_progress.setObjectName("pageStatus")
         self.footer_book_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         navigation.addWidget(self.page_label)
-        navigation.addWidget(self.jump_back_button)
-        navigation.addWidget(self.jump_back_label)
-        navigation.addWidget(self.jump_forward_button)
-        navigation.addWidget(self.jump_forward_label)
         navigation.addStretch(1)
+        navigation.addWidget(self.jump_back_label)
+        navigation.addWidget(self.jump_back_button)
         navigation.addWidget(self.previous_chapter)
         navigation.addWidget(self.previous)
         navigation.addWidget(self.next)
         navigation.addWidget(self.next_chapter)
+        navigation.addWidget(self.jump_forward_button)
+        navigation.addWidget(self.jump_forward_label)
         navigation.addStretch(1)
         navigation.addWidget(self.footer_book_progress)
         reading.addWidget(self.reader_navigation)
