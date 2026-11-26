@@ -13,7 +13,7 @@ from quietreader.persistence.data_paths import (
     migrate_legacy_data,
     remap_relocated_shelf_paths,
 )
-from quietreader.persistence.store import StateStore
+from quietreader.persistence.store import MAX_TERM_NOTES_BYTES_MIB, StateStore
 from quietreader.ui.window import MainWindow
 from quietreader.i18n import tr
 
@@ -111,9 +111,14 @@ def main():
     store = StateStore(directory)
     if not store.read_only and remap_relocated_shelf_paths(store.state, directory):
         try:
-            store.save()
+            saved = store.save()
         except OSError:
             store.warning = "书架路径已在本次运行中修复，但未能保存；请检查数据目录权限并重启。"
+        else:
+            if saved is False:
+                store.warning = (
+                    f"词条标注数据超过存储容量上限（{MAX_TERM_NOTES_BYTES_MIB} MiB），未能保存。"
+                )
     window = MainWindow(store)
     window_ref["window"] = window
     app.aboutToQuit.connect(window.shutdown)

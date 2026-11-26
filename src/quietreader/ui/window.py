@@ -55,7 +55,8 @@ from quietreader.ui.toast import ToastNotice
 from quietreader.persistence.store import (
     MAX_BOOKMARKS, MAX_BOOKMARK_NOTE, MAX_BOOK_RECORDS, MAX_BOOK_TITLE_OVERRIDE,
     MAX_JUMP_HISTORY, MAX_JUMP_HISTORY_BOOKS,
-    MAX_TERM_NOTES, MAX_TERM_TEXT, normalize_term_note, normalize_term_text,
+    MAX_TERM_NOTES, MAX_TERM_NOTES_BYTES_MIB, MAX_TERM_TEXT,
+    normalize_term_note, normalize_term_text,
 )
 from quietreader.library.shelf import SUPPORTED_SUFFIXES, ShelfError, ShelfManager, UNCLASSIFIED, book_id_for_path
 from quietreader.ui.shelf import ShelfPanel, display_title_for_record
@@ -3425,9 +3426,10 @@ class MainWindow(QMainWindow):
         if not clean_term or not clean_note:
             return False
         all_records = self.store.state.setdefault("term_notes", {})
-        records = all_records.setdefault(self.book.id, [])
+        records = deepcopy(all_records.get(self.book.id, []))
         new_key = clean_term.casefold()
         orig_key = normalize_term_text(original_term).casefold() if original_term else ""
+        is_new_term = False
 
         existing_idx = next(
             (i for i, item in enumerate(records) if item.get("term", "").casefold() == new_key),
@@ -3453,7 +3455,11 @@ class MainWindow(QMainWindow):
             status_key = "已更新词条标注：{term}"
         else:
             if len(records) >= MAX_TERM_NOTES:
-                self.set_status("本书词条标注数量已达上限（{limit} 条）。", limit=MAX_TERM_NOTES)
+                self.set_status(
+                    "本书词条标注数量已达上限（{limit} 条）。",
+                    limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
+                )
                 return False
             record = asdict(TermNote(
                 term=clean_term,
@@ -3462,6 +3468,24 @@ class MainWindow(QMainWindow):
             ))
             records.insert(0, record)
             status_key = "已添加词条标注：{term}"
+            is_new_term = True
+
+        candidate_records = dict(all_records)
+        candidate_records[self.book.id] = records
+        if not self.store.term_notes_fit_storage_limit(candidate_records):
+            message = (
+                "词条标注数据将超过存储容量上限（{limit} MiB），未能新增词条。"
+                if is_new_term
+                else "词条标注数据将超过存储容量上限（{limit} MiB），未保存修改。"
+            )
+            self.set_status(
+                message,
+                limit=MAX_TERM_NOTES_BYTES_MIB,
+                notify_in_focus=True,
+            )
+            return False
+
+        all_records[self.book.id] = records
 
         self._refresh_term_notes(select_term=clean_term)
         self.set_status(status_key, term=clean_term)
@@ -3530,7 +3554,13 @@ class MainWindow(QMainWindow):
         *,
         overwrite: bool = False,
     ) -> dict:
-        summary = {"added": 0, "updated": 0, "skipped": 0, "limit_reached": False}
+        summary = {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "limit_reached": False,
+            "storage_limit_reached": False,
+        }
         if not self.book or not source_book_id or source_book_id == self.book.id:
             return summary
         if self.store.read_only or getattr(self.store, "term_notes_read_only", False):
@@ -3545,10 +3575,11 @@ class MainWindow(QMainWindow):
             if selected_terms is not None
             else None
         )
-        target_records = all_records.setdefault(self.book.id, [])
+        target_records = all_records.get(self.book.id, [])
+        working_records = deepcopy(target_records)
         existing_by_key = {
             item.get("term", "").casefold(): item
-            for item in target_records
+            for item in working_records
             if isinstance(item, dict) and item.get("term")
         }
         new_entries: list[dict] = []
@@ -3571,7 +3602,7 @@ class MainWindow(QMainWindow):
                 else:
                     summary["skipped"] += 1
                 continue
-            if len(target_records) + len(new_entries) >= MAX_TERM_NOTES:
+            if len(working_records) + len(new_entries) >= MAX_TERM_NOTES:
                 summary["limit_reached"] = True
                 continue
             copied = asdict(TermNote(term=term, note=note, created=timestamp))
@@ -3579,32 +3610,93 @@ class MainWindow(QMainWindow):
             existing_by_key[key] = copied
             summary["added"] += 1
 
-        if new_entries:
-            target_records[:0] = new_entries
-        if not target_records:
-            all_records.pop(self.book.id, None)
-        if summary["added"] or summary["updated"]:
+        accepted_entries = new_entries
+        if accepted_entries or summary["updated"]:
+            candidate_records = dict(all_records)
+            candidate_records[self.book.id] = [*accepted_entries, *working_records]
+            if not self.store.term_notes_fit_storage_limit(candidate_records):
+                summary["storage_limit_reached"] = True
+                updated_records = dict(all_records)
+                updated_records[self.book.id] = working_records
+                if not self.store.term_notes_fit_storage_limit(updated_records):
+                    working_records = deepcopy(target_records)
+                    accepted_entries = []
+                    summary["updated"] = 0
+                else:
+                    low, high = 0, len(accepted_entries)
+                    while low < high:
+                        midpoint = (low + high + 1) // 2
+                        partial_records = dict(all_records)
+                        partial_records[self.book.id] = [
+                            *accepted_entries[:midpoint], *working_records,
+                        ]
+                        if self.store.term_notes_fit_storage_limit(partial_records):
+                            low = midpoint
+                        else:
+                            high = midpoint - 1
+                    accepted_entries = accepted_entries[:low]
+            summary["added"] = len(accepted_entries)
+
+        if accepted_entries or summary["updated"]:
+            all_records[self.book.id] = [*accepted_entries, *working_records]
             self._refresh_term_notes()
             self.schedule_save()
+        elif not target_records:
+            all_records.pop(self.book.id, None)
 
         added = summary["added"]
         updated = summary["updated"]
         skipped = summary["skipped"]
-        if summary["limit_reached"]:
+        if summary["storage_limit_reached"]:
+            if added and updated:
+                self.set_status(
+                    "已继承 {added} 条并覆盖 {updated} 条词条标注（达到存储上限 {limit} MiB，剩余词条未新增）。",
+                    added=added, updated=updated, limit=MAX_TERM_NOTES_BYTES_MIB,
+                    notify_in_focus=True,
+                )
+            elif added:
+                self.set_status(
+                    "已继承 {added} 条词条标注（达到存储上限 {limit} MiB，剩余词条未新增）。",
+                    added=added, limit=MAX_TERM_NOTES_BYTES_MIB,
+                    notify_in_focus=True,
+                )
+            elif updated:
+                self.set_status(
+                    "已更新 {updated} 条同名词条标注；达到存储上限 {limit} MiB，未新增词条。",
+                    updated=updated, limit=MAX_TERM_NOTES_BYTES_MIB,
+                    notify_in_focus=True,
+                )
+            else:
+                self.set_status(
+                    "本次继承因存储容量上限（{limit} MiB）未能写入新词条或修改。",
+                    limit=MAX_TERM_NOTES_BYTES_MIB,
+                    notify_in_focus=True,
+                )
+        elif summary["limit_reached"]:
             if added and updated:
                 self.set_status(
                     "已继承 {added} 条并覆盖 {updated} 条词条标注（已达单书 {limit} 条上限）。",
                     added=added, updated=updated, limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
                 )
             elif added:
                 self.set_status(
                     "已继承 {added} 条词条标注（已达单书 {limit} 条上限）。",
                     added=added, limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
                 )
             elif updated:
-                self.set_status("已更新 {updated} 条同名词条标注。", updated=updated)
+                self.set_status(
+                    "已更新 {updated} 条同名词条标注；本书已达单书 {limit} 条上限，未新增词条。",
+                    updated=updated, limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
+                )
             else:
-                self.set_status("本书词条已达上限（{limit} 条），未能新增词条。", limit=MAX_TERM_NOTES)
+                self.set_status(
+                    "本书词条已达上限（{limit} 条），未能新增词条。",
+                    limit=MAX_TERM_NOTES,
+                    notify_in_focus=True,
+                )
         elif added and updated:
             self.set_status("已继承 {added} 条词条标注，覆盖 {updated} 条同名词条。", added=added, updated=updated)
         elif added and skipped:
@@ -4458,12 +4550,19 @@ class MainWindow(QMainWindow):
                 return max(44, self.surface.height() - anchor_y + 14)
         return 44
 
-    def set_status(self, source, notify=True, toast_action_text=None, toast_action=None, **values):
+    def set_status(
+        self, source, notify=True, toast_action_text=None, toast_action=None,
+        notify_in_focus=False, **values,
+    ):
         self.status_source = (source, values)
         self.status.setProperty("translation_source", None)
         text = self.t(source, **values)
         self.status.setText(text)
-        if notify and hasattr(self, "toast") and not self.focus_mode and not self.closed and not self._window_hidden:
+        if (
+            notify and hasattr(self, "toast")
+            and (not self.focus_mode or notify_in_focus)
+            and not self.closed and not self._window_hidden
+        ):
             self._toast_status_source = (source, dict(values), toast_action_text, toast_action)
             self.toast.show_message(
                 self._toast_status_text(source, values, toast_action_text),
@@ -5054,9 +5153,16 @@ class MainWindow(QMainWindow):
             self.store.state["positions"][self.book.id] = asdict(Position(section.id, self.reader.offset))
             self._persist_jump_history(schedule=False)
         try:
-            self.store.save()
+            saved = self.store.save()
         except OSError:
             self.set_status("保存失败，请检查用户数据目录的权限和可用空间。")
+            return False
+        if saved is False:
+            self.set_status(
+                "词条标注数据超过存储容量上限（{limit} MiB），未能保存。",
+                limit=MAX_TERM_NOTES_BYTES_MIB,
+                notify_in_focus=True,
+            )
             return False
         return True
 
