@@ -85,6 +85,7 @@ class PageView(QWidget):
     term_search_requested = Signal(str)
 
     _MAX_SECTION_PAGE_CACHE = 64
+    _REFLOW_ANCHOR_COOLDOWN_MS = 5000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -336,8 +337,12 @@ class PageView(QWidget):
             )
         )
         pending_anchor = self._pending_reflow_anchor
+        marked_anchor = self._active_reflow_anchor()
         if pending_anchor is not None:
             anchor_offset = pending_anchor
+            align_offset = True
+        elif marked_anchor is not None:
+            anchor_offset = marked_anchor
             align_offset = True
         elif layout_changed:
             anchor_offset = self._current_page_start_offset()
@@ -487,6 +492,11 @@ class PageView(QWidget):
         page = min(max(0, self.page), len(self.page_offsets) - 1)
         return self.page_offsets[page]
 
+    def _active_reflow_anchor(self) -> int | None:
+        if self._reflow_anchor_marker_timer.isActive():
+            return self._reflow_anchor_marker_offset
+        return None
+
     def _clear_reflow_anchor_marker(self):
         self._reflow_anchor_marker_timer.stop()
         self._reflow_anchor_marker_offset = None
@@ -523,7 +533,7 @@ class PageView(QWidget):
                 if not self._reflow_anchor_marker_rects:
                     self._reflow_anchor_marker_status = "页首内容未显示"
 
-        self._reflow_anchor_marker_timer.start(5000)
+        self._reflow_anchor_marker_timer.start(self._REFLOW_ANCHOR_COOLDOWN_MS)
         self.update()
 
     def _draw_reflow_anchor_marker(self, painter: QPainter, palette: dict):
@@ -559,10 +569,18 @@ class PageView(QWidget):
 
     def reflow(self, anchor_offset=None, *, align_offset=False):
         self.clear_term_hover()
-        show_anchor_marker = align_offset or self._pending_reflow_anchor is not None
+        marked_anchor = self._active_reflow_anchor()
+        show_anchor_marker = (
+            align_offset
+            or self._pending_reflow_anchor is not None
+            or (anchor_offset is None and marked_anchor is not None)
+        )
         if anchor_offset is None:
             if self._pending_reflow_anchor is not None:
                 anchor_offset = self._pending_reflow_anchor
+                align_offset = True
+            elif marked_anchor is not None:
+                anchor_offset = marked_anchor
                 align_offset = True
             else:
                 anchor_offset = self.offset
@@ -599,7 +617,10 @@ class PageView(QWidget):
         )
         if self._resize_reflow_timer.isActive() or self._layout_size != layout_size:
             if self._pending_reflow_anchor is None:
-                self._pending_reflow_anchor = self._current_page_start_offset()
+                marked_anchor = self._active_reflow_anchor()
+                self._pending_reflow_anchor = (
+                    marked_anchor if marked_anchor is not None else self._current_page_start_offset()
+                )
             self._resize_reflow_timer.stop()
             self.reflow()
 
@@ -667,7 +688,10 @@ class PageView(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if not self._resize_reflow_timer.isActive():
-            self._pending_reflow_anchor = self._current_page_start_offset()
+            marked_anchor = self._active_reflow_anchor()
+            self._pending_reflow_anchor = (
+                marked_anchor if marked_anchor is not None else self._current_page_start_offset()
+            )
         self._resize_reflow_timer.start()
 
     def _emit_wheel_turn(self, direction):
