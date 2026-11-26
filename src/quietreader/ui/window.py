@@ -195,7 +195,7 @@ class _JumpTargetLabel(QLabel):
         self._page_text = ""
         self.setTextFormat(Qt.TextFormat.PlainText)
         self.setMinimumWidth(0)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
     def set_target(self, chapter: str, page_text: str):
         self._chapter = chapter
@@ -203,6 +203,20 @@ class _JumpTargetLabel(QLabel):
         full_text = f"{chapter} · {page_text}" if chapter and page_text else chapter
         self.setToolTip(full_text)
         self._apply_elide()
+
+    def sizeHint(self):
+        full_text = (
+            f"{self._chapter} · {self._page_text}"
+            if self._chapter and self._page_text
+            else self._chapter
+        )
+        margins = self.contentsMargins()
+        text_width = self.fontMetrics().horizontalAdvance(full_text)
+        width = min(
+            text_width + margins.left() + margins.right(),
+            self.maximumWidth(),
+        )
+        return QSize(width, super().sizeHint().height())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1449,11 +1463,11 @@ class MainWindow(QMainWindow):
         self.page_label.setProperty("full_text", "PageUp / PageDown")
         self.page_label.setProperty("compact_text", "Pg")
 
-        # Keep the history groups reserved so chapter buttons never slide into them.
+        # Reserve each history button's hit area while letting its target label size naturally.
         self.jump_back_slot = QWidget(self.reader_navigation)
         self.jump_back_slot_layout = QHBoxLayout(self.jump_back_slot)
         self.jump_back_slot_layout.setContentsMargins(0, 0, 0, 0)
-        self.jump_back_slot_layout.setSpacing(navigation.spacing())
+        self.jump_back_slot_layout.setSpacing(0)
         self.jump_back_button = QPushButton("↶", self.jump_back_slot)
         self.jump_back_button.setObjectName("jumpBackButton")
         self.jump_back_button.setProperty("translation_source", "↶")
@@ -1466,22 +1480,17 @@ class MainWindow(QMainWindow):
         self.jump_back_button.setFixedSize(22, 20)
         self.jump_back_button.clicked.connect(self.jump_back)
         self.jump_back_button.hide()
-        self.jump_back_label = _JumpTargetLabel(self.jump_back_slot)
+        self.jump_back_label = _JumpTargetLabel(self.reader_navigation)
         self.jump_back_label.setObjectName("jumpTargetLabel")
         self.jump_back_label.setMaximumWidth(132)
         self.jump_back_label.hide()
-        self.jump_back_slot_layout.addWidget(self.jump_back_label)
         self.jump_back_slot_layout.addWidget(self.jump_back_button)
-        self.jump_back_slot.setFixedWidth(
-            self.jump_back_button.width()
-            + self.jump_back_slot_layout.spacing()
-            + self.jump_back_label.maximumWidth()
-        )
+        self.jump_back_slot.setFixedWidth(self.jump_back_button.width())
 
         self.jump_forward_slot = QWidget(self.reader_navigation)
         self.jump_forward_slot_layout = QHBoxLayout(self.jump_forward_slot)
         self.jump_forward_slot_layout.setContentsMargins(0, 0, 0, 0)
-        self.jump_forward_slot_layout.setSpacing(navigation.spacing())
+        self.jump_forward_slot_layout.setSpacing(0)
         self.jump_forward_button = QPushButton("↷", self.jump_forward_slot)
         self.jump_forward_button.setObjectName("jumpForwardButton")
         self.jump_forward_button.setProperty("translation_source", "↷")
@@ -1494,17 +1503,12 @@ class MainWindow(QMainWindow):
         self.jump_forward_button.setFixedSize(22, 20)
         self.jump_forward_button.clicked.connect(self.jump_forward)
         self.jump_forward_button.hide()
-        self.jump_forward_label = _JumpTargetLabel(self.jump_forward_slot)
+        self.jump_forward_label = _JumpTargetLabel(self.reader_navigation)
         self.jump_forward_label.setObjectName("jumpTargetLabel")
         self.jump_forward_label.setMaximumWidth(132)
         self.jump_forward_label.hide()
         self.jump_forward_slot_layout.addWidget(self.jump_forward_button)
-        self.jump_forward_slot_layout.addWidget(self.jump_forward_label)
-        self.jump_forward_slot.setFixedWidth(
-            self.jump_forward_button.width()
-            + self.jump_forward_slot_layout.spacing()
-            + self.jump_forward_label.maximumWidth()
-        )
+        self.jump_forward_slot.setFixedWidth(self.jump_forward_button.width())
         self.previous_chapter = self._icon_button("prev_chapter", lambda: self.turn_chapter(-1), "上一章", size=13, fixed_size=(24, 22))
         self.previous = self._icon_button("prev_page", lambda: self.turn_page(-1), "← 上一页", size=13, fixed_size=(24, 22))
         self.next = self._icon_button("next_page", lambda: self.turn_page(1), "下一页 →", size=13, fixed_size=(24, 22))
@@ -1513,6 +1517,7 @@ class MainWindow(QMainWindow):
         self.footer_book_progress.setObjectName("pageStatus")
         self.footer_book_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         navigation.addWidget(self.page_label)
+        navigation.addWidget(self.jump_back_label)
         navigation.addStretch(1)
         navigation.addWidget(self.jump_back_slot)
         navigation.addWidget(self.previous_chapter)
@@ -1520,6 +1525,7 @@ class MainWindow(QMainWindow):
         navigation.addWidget(self.next)
         navigation.addWidget(self.next_chapter)
         navigation.addWidget(self.jump_forward_slot)
+        navigation.addWidget(self.jump_forward_label)
         navigation.addStretch(1)
         navigation.addWidget(self.footer_book_progress)
         reading.addWidget(self.reader_navigation)
@@ -4934,12 +4940,33 @@ class MainWindow(QMainWindow):
         compact_page_label = self.page_label.property("compact_text") or "Pg"
         self.page_label.setText(full_page_label)
         self.page_label.setToolTip(full_page_label)
-        footer_w = self.footer_book_progress.sizeHint().width() if hasattr(self, "footer_book_progress") else 0
-        target_controls_width = sum(
-            slot.maximumWidth() + self.reader_navigation_layout.spacing()
-            for slot in (self.jump_back_slot, self.jump_forward_slot)
+        navigation_widgets = (
+            self.page_label,
+            self.jump_back_label,
+            self.jump_back_slot,
+            self.previous_chapter,
+            self.previous,
+            self.next,
+            self.next_chapter,
+            self.jump_forward_slot,
+            self.jump_forward_label,
+            self.footer_book_progress,
         )
-        full_width = self.page_label.sizeHint().width() + footer_w + 132 + target_controls_width
+        visible_widgets = [widget for widget in navigation_widgets if not widget.isHidden()]
+        content_width = 0
+        for widget in visible_widgets:
+            width = widget.sizeHint().width()
+            if isinstance(widget, _JumpTargetLabel):
+                width = min(width, widget.maximumWidth())
+            content_width += width
+        margins = self.reader_navigation_layout.contentsMargins()
+        spacing_count = len(visible_widgets) + 1  # Include the two stretch items.
+        full_width = (
+            content_width
+            + spacing_count * self.reader_navigation_layout.spacing()
+            + margins.left()
+            + margins.right()
+        )
         compact = self.reader_navigation.width() < full_width
         if compact:
             self.page_label.setText(compact_page_label)
