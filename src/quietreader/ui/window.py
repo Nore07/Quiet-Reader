@@ -203,6 +203,7 @@ class _JumpTargetLabel(QLabel):
         full_text = f"{chapter} · {page_text}" if chapter and page_text else chapter
         self.setToolTip(full_text)
         self._apply_elide()
+        self.updateGeometry()
 
     def sizeHint(self):
         full_text = (
@@ -237,11 +238,16 @@ class _JumpTargetLabel(QLabel):
                     self._chapter, Qt.TextElideMode.ElideRight, chapter_width,
                 )
                 visible_text = f"{chapter}{suffix}"
+            elif available_width >= (
+                metrics.horizontalAdvance(self._chapter[:1])
+                + metrics.horizontalAdvance(suffix)
+            ):
+                chapter = metrics.elidedText(
+                    self._chapter, Qt.TextElideMode.ElideRight, chapter_width,
+                ) or self._chapter[:1]
+                visible_text = f"{chapter}{suffix}"
             else:
-                visible_text = metrics.elidedText(
-                    self._page_text or self._chapter,
-                    Qt.TextElideMode.ElideRight, available_width,
-                )
+                visible_text = ""
         if visible_text != self.text():
             self.setText(visible_text)
 
@@ -1517,8 +1523,8 @@ class MainWindow(QMainWindow):
         self.footer_book_progress.setObjectName("pageStatus")
         self.footer_book_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         navigation.addWidget(self.page_label)
-        navigation.addWidget(self.jump_back_label)
         navigation.addStretch(1)
+        navigation.addWidget(self.jump_back_label)
         navigation.addWidget(self.jump_back_slot)
         navigation.addWidget(self.previous_chapter)
         navigation.addWidget(self.previous)
