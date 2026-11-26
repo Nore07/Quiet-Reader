@@ -2996,6 +2996,7 @@ class MainWindow(QMainWindow):
     def turn_page(self, direction):
         if not self.book:
             return
+        self.reader.flush_pending_reflow()
         destination = self.reader.page + direction
         if destination < 0:
             if self.section_index > 0:

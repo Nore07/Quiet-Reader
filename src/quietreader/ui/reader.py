@@ -92,6 +92,8 @@ class PageView(QWidget):
         self._resize_reflow_timer.setSingleShot(True)
         self._resize_reflow_timer.setInterval(160)
         self._resize_reflow_timer.timeout.connect(self.reflow)
+        self._pending_reflow_anchor: int | None = None
+        self._layout_size: tuple[int, int] | None = None
         self.settings = Settings()
         self.focus_mode = False
         self.focus_background_override = ""
@@ -156,6 +158,7 @@ class PageView(QWidget):
 
     def set_text(self, text: str, offset=0, images=None, links=None, formats=None):
         self._resize_reflow_timer.stop()
+        self._pending_reflow_anchor = None
         self.clear_term_hover()
         self.text = text
         self._offset_map = _TextOffsetMap(text)
@@ -173,7 +176,7 @@ class PageView(QWidget):
         self.images = self._decode_section_images(self.document, images, self)
         self.selection = QTextCursor(self.document)
         self._rebuild_term_spans()
-        self.reflow()
+        self.reflow(anchor_offset=self.offset)
 
     def set_term_notes(self, records):
         """Compile a single longest-first regex and precompute section term spans."""
@@ -314,9 +317,30 @@ class PageView(QWidget):
         return self.focus_background_override or self.settings.background_color
 
     def apply_settings(self, settings):
+        layout_changed = any(
+            getattr(self.settings, name) != getattr(settings, name)
+            for name in (
+                "font_family",
+                "font_size",
+                "line_height",
+                "letter_spacing",
+                "paragraph_spacing",
+                "padding",
+            )
+        )
+        pending_anchor = self._pending_reflow_anchor
+        if pending_anchor is not None:
+            anchor_offset = pending_anchor
+            align_offset = True
+        elif layout_changed:
+            anchor_offset = self._current_page_start_offset()
+            align_offset = True
+        else:
+            anchor_offset = self.offset
+            align_offset = False
         self._resize_reflow_timer.stop()
         self.settings = settings
-        self.reflow()
+        self.reflow(anchor_offset=anchor_offset, align_offset=align_offset)
 
     def _layout_document_pages(
         self,
@@ -450,8 +474,22 @@ class PageView(QWidget):
         ]
         return page_offsets, image_sizes
 
-    def reflow(self):
+    def _current_page_start_offset(self) -> int:
+        if not self.page_offsets:
+            return self.offset
+        page = min(max(0, self.page), len(self.page_offsets) - 1)
+        return self.page_offsets[page]
+
+    def reflow(self, anchor_offset=None, *, align_offset=False):
         self.clear_term_hover()
+        if anchor_offset is None:
+            if self._pending_reflow_anchor is not None:
+                anchor_offset = self._pending_reflow_anchor
+                align_offset = True
+            else:
+                anchor_offset = self.offset
+        anchor_offset = max(0, min(len(self.text), int(anchor_offset)))
+        self._pending_reflow_anchor = None
         padding = self.settings.padding
         width = max(80, self.width() - padding * 2)
         self.page_height = max(60, self.height() - padding * 2)
@@ -466,9 +504,24 @@ class PageView(QWidget):
         )
         self.page_count = len(page_offsets)
         self.page_offsets = page_offsets
-        self.page = min(self.page_count - 1, max(0, bisect_right(self.page_offsets, self.offset) - 1))
+        self.page = min(self.page_count - 1, max(0, bisect_right(self.page_offsets, anchor_offset) - 1))
+        if align_offset:
+            self.offset = self.page_offsets[self.page]
+        self._layout_size = (width, self.page_height)
         self.update()
         self.reflowed.emit()
+
+    def flush_pending_reflow(self):
+        padding = self.settings.padding
+        layout_size = (
+            max(80, self.width() - padding * 2),
+            max(60, self.height() - padding * 2),
+        )
+        if self._resize_reflow_timer.isActive() or self._layout_size != layout_size:
+            if self._pending_reflow_anchor is None:
+                self._pending_reflow_anchor = self._current_page_start_offset()
+            self._resize_reflow_timer.stop()
+            self.reflow()
 
     def page_for_section_offset(
         self,
@@ -532,6 +585,8 @@ class PageView(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if not self._resize_reflow_timer.isActive():
+            self._pending_reflow_anchor = self._current_page_start_offset()
         self._resize_reflow_timer.start()
 
     def _emit_wheel_turn(self, direction):
