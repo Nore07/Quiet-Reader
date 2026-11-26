@@ -14,6 +14,7 @@ MAX_TERM_NOTES = 500
 MAX_TERM_TEXT = 60
 MAX_TERM_NOTE = 1000
 MAX_TERM_NOTES_BYTES = 16 * 1024 * 1024
+MAX_TERM_NOTES_BYTES_MIB = MAX_TERM_NOTES_BYTES // (1024 * 1024)
 MAX_BOOK_RECORDS = 500
 MAX_BOOK_TITLE_OVERRIDE = 200
 MAX_JUMP_HISTORY = 30
@@ -184,6 +185,13 @@ def _merge_term_notes(primary: dict, fallback: dict) -> dict:
     return merged
 
 
+def _term_notes_payload_size(raw: dict) -> int:
+    payload = {"version": TERM_NOTES_VERSION, "term_notes": _clean_term_notes(raw)}
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    newline_extra = max(0, len(os.linesep.encode("ascii")) - 1) * serialized.count("\n")
+    return len(serialized.encode("utf-8")) + newline_extra
+
+
 def initial_state():
     return {
         "version": VERSION,
@@ -331,14 +339,27 @@ class StateStore:
             os.replace(backup_temp, backup)
         os.replace(temp, path)
 
+    @staticmethod
+    def term_notes_fit_storage_limit(term_notes: dict) -> bool:
+        try:
+            return _term_notes_payload_size(term_notes) <= MAX_TERM_NOTES_BYTES
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return False
+
     def save(self):
         if self.read_only:
-            return
+            return None
         data = deepcopy(self.state)
         term_notes = _clean_term_notes(data.pop("term_notes", {}))
         data["version"] = VERSION
+        write_term_notes = (
+            not self.term_notes_read_only
+            and (self.term_notes_path.exists() or bool(term_notes))
+        )
+        if write_term_notes and not self.term_notes_fit_storage_limit(term_notes):
+            return False
         self._atomic_write_json(self.path, self.backup, data)
-        if not self.term_notes_read_only and (self.term_notes_path.exists() or term_notes):
+        if write_term_notes:
             self._atomic_write_json(
                 self.term_notes_path,
                 self.term_notes_backup,
