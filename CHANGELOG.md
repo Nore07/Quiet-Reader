@@ -1,5 +1,55 @@
 # QuietReader 更新日志 / Changelog
 
+## [0.1.9] — 2026-11-26
+
+### 简体中文
+
+QuietReader 0.1.9 是 Windows x64 功能版本，基于 0.1.8 增加 PDF 阅读、词条标注、全书搜索与摸鱼模式，并改进 TXT 解析和阅读导航。
+
+#### 下载与升级
+
+- 便携版：[QuietReader-0.1.9-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-0.1.9-Windows-x64.zip)。
+- SHA-256：`b6123bab6a1f931e4825ebd167c87f21f5ada90e0a09b40f16b64d98810c366d`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-0.1.9-Windows-x64.zip.sha256)。
+- 安装升级包：[QuietReader-Setup-0.1.9-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-Setup-0.1.9-x64.exe)。
+- SHA-256：`1cf958c9c9e16c501fc39022c42134ae9023b3500b913ccc5f31dc5bec6d7b38`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-Setup-0.1.9-x64.exe.sha256)。
+- 从 0.1.8 原目录升级会保留 `data`。词条标注保存在新文件 `data/term_notes.json`，并自动保留备份；原有配置、书籍、书签和阅读进度继续使用。便携包不含个人数据，软件包未进行代码签名。
+
+#### 相较 0.1.8 的改动
+
+- **新增 PDF 阅读**：逐页提取可读取文字并按正文排版；扫描页以页面图像显示，不进行 OCR。支持不超过 64 MiB、4096 页的 PDF；密码保护文件暂不支持。
+- **新增全书搜索与跳转历史**：可在侧栏搜索当前书籍，查看上下文片段和命中高亮；搜索结果及目录跳转后可按顺序返回之前的位置。
+- **新增词条标注**：选中正文后可添加词条和备注，也可从侧栏管理；正文中的词条会自动标记，悬停可查看备注，并可从其他书籍导入词条。
+- **新增摸鱼模式**：把正文缩为可自动显隐的一行或两行阅读条；滚轮、`PageUp` / `PageDown` 可逐句阅读，按住窗口调整键可移动阅读条，快捷键可切换模式和行数。
+- **改进 TXT 导入**：更宽容地处理控制字符和异常文本，优化章节识别，并提升大文件解析效率。
+- **改进阅读导航与窗口适配**：加入滚轮翻页，修正窄窗口、窗口缩放和阅读位置锚点相关的分页问题；更新中英文 README 与功能截图。
+
+本版本新增 PDF 运行依赖及词条标注数据文件；不更改现有设置格式。原 `data` 数据会保留。
+
+### English
+
+QuietReader 0.1.9 is a Windows x64 feature release. Since 0.1.8, it adds PDF reading, term notes, book-wide search, and Moyu mode, with improvements to TXT parsing and reader navigation.
+
+#### Download and upgrade
+
+- Portable package: [QuietReader-0.1.9-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-0.1.9-Windows-x64.zip).
+- SHA-256: `b6123bab6a1f931e4825ebd167c87f21f5ada90e0a09b40f16b64d98810c366d`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-0.1.9-Windows-x64.zip.sha256).
+- Setup and upgrade package: [QuietReader-Setup-0.1.9-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-Setup-0.1.9-x64.exe).
+- SHA-256: `1cf958c9c9e16c501fc39022c42134ae9023b3500b913ccc5f31dc5bec6d7b38`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.9/QuietReader-Setup-0.1.9-x64.exe.sha256).
+- An in-place upgrade from 0.1.8 preserves `data`. Term notes use the new `data/term_notes.json` file with an automatic backup; existing settings, books, bookmarks, and reading progress remain in place. The portable package excludes personal data. The packages are unsigned.
+
+#### Changes since 0.1.8
+
+- **PDF reading** extracts readable text and lays it out as reader text; scanned pages appear as page images without OCR. PDFs up to 64 MiB and 4,096 pages are supported. Password-protected files are not supported yet.
+- **Book-wide search and jump history** let readers search the current book in the sidebar, review contextual snippets and highlighted matches, and return through earlier positions after search or table-of-contents navigation.
+- **Term notes** can be added from selected text or managed in the sidebar. Matching terms are marked in the book, notes appear on hover, and notes can be imported from another book.
+- **Moyu mode** condenses text into an auto-hiding one-line or two-line reading strip. The mouse wheel and `PageUp` / `PageDown` move sentence by sentence; the window control key moves the strip, and shortcuts switch the mode and line count.
+- **TXT import** handles control characters and malformed text more robustly, improves chapter detection, and parses large files faster.
+- **Reader navigation and resizing** now include wheel paging and fixes for pagination, reading-position anchors, and narrow windows. The Chinese and English READMEs and feature screenshots were updated.
+
+This release adds the PDF runtime dependency and a term-note data file. It does not change the existing settings format, and existing `data` is preserved.
+
+[完整变更 / Full changelog](https://github.com/Nore07/Quiet-Reader/compare/v0.1.8...v0.1.9)
+
 ## [0.1.8] — 2026-11-24
 
 ### 简体中文
@@ -9,9 +59,9 @@ QuietReader 0.1.8 修复设置滑块和专注模式窗口调整时的交互问�
 #### 下载与升级
 
 - 便携版：[QuietReader-0.1.8-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip)。
-- SHA-256：`568cc15c8fc8a620484747c4ebfaece680e129a22324551c193eafb4c477709d`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip.sha256)。
+- SHA-256：`e36496bf5ba7f92a20f0a9bb524bbd409348cabd7e51f807612ccaaa33a0e127`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip.sha256)。
 - 安装升级包：[QuietReader-Setup-0.1.8-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe)。
-- SHA-256：`6fe9a95f6c49fd47c9f6b550fc71e792493ffbbd6933728ae4504507d26f1001`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe.sha256)。
+- SHA-256：`64df52e0afac75183bdf27a9c1a70a1a7e89ac36f5dddc7102a48fc9980206a3`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe.sha256)。
 - 更新时保留原来的 `data` 文件夹；安装程序原地升级会保留现有数据。便携包不包含个人书籍或配置，且软件包未进行代码签名。
 
 #### 本次改进
@@ -30,9 +80,9 @@ QuietReader 0.1.8 is a Windows x64 maintenance release with smoother settings sl
 #### Download and upgrade
 
 - Portable package: [QuietReader-0.1.8-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip).
-- SHA-256: `568cc15c8fc8a620484747c4ebfaece680e129a22324551c193eafb4c477709d`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip.sha256).
+- SHA-256: `e36496bf5ba7f92a20f0a9bb524bbd409348cabd7e51f807612ccaaa33a0e127`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-0.1.8-Windows-x64.zip.sha256).
 - Setup and upgrade package: [QuietReader-Setup-0.1.8-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe).
-- SHA-256: `6fe9a95f6c49fd47c9f6b550fc71e792493ffbbd6933728ae4504507d26f1001`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe.sha256).
+- SHA-256: `64df52e0afac75183bdf27a9c1a70a1a7e89ac36f5dddc7102a48fc9980206a3`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.8/QuietReader-Setup-0.1.8-x64.exe.sha256).
 - Keep the existing `data` folder when updating. Setup preserves it during an in-place upgrade. The portable package excludes personal books and settings. The packages are unsigned.
 
 #### Changes
