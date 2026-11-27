@@ -1,3 +1,3 @@
 """QuietReader — local-first desktop reading."""
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
