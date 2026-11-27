@@ -4822,6 +4822,9 @@ class MainWindow(QMainWindow):
         ):
             if changed_fields & _READER_LAYOUT_SETTINGS_FIELDS:
                 self._reader_settings_dirty = True
+                self.settings_page.sync_reading_controls(
+                    settings, changed_fields & _READER_LAYOUT_SETTINGS_FIELDS,
+                )
             self.schedule_save()
             return
         if settings.auto_check_updates and not previously_enabled:

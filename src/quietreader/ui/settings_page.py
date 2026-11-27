@@ -829,6 +829,21 @@ class SettingsPage(QWidget):
     def current_section(self) -> str:
         return self._active_section
 
+    def sync_reading_controls(self, settings: Settings, fields=None):
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._settings = replace(settings)
+            if fields is None or "font_family" in fields:
+                self.font_combo.setCurrentFont(QFont(settings.font_family))
+            for key, ctrl in self.typo_sliders.items():
+                if fields is not None and key not in fields:
+                    continue
+                ctrl.set_value(getattr(settings, key))
+                ctrl.retranslate(settings.language)
+        finally:
+            self._syncing = was_syncing
+
     def sync_settings(self, settings: Settings, palette: dict[str, str]):
         self._syncing = True
         self._settings = replace(settings)
@@ -841,10 +856,7 @@ class SettingsPage(QWidget):
             card.apply_card_style(palette["accent"])
 
         self.language_control.set_current(settings.language, emit=False)
-        self.font_combo.setCurrentFont(QFont(settings.font_family))
-        for key, ctrl in self.typo_sliders.items():
-            ctrl.set_value(getattr(settings, key))
-            ctrl.retranslate(settings.language)
+        self.sync_reading_controls(settings)
 
         self._refresh_color_swatches()
         pct = round(max(0.0, min(1.0, settings.opacity)) * 100)
