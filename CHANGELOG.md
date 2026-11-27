@@ -1,5 +1,49 @@
 # QuietReader 更新日志 / Changelog
 
+## [0.1.10] — 2026-11-27
+
+### 简体中文
+
+QuietReader 0.1.10 是 Windows x64 维护版本，修复阅读重排和设置页交互问题。
+
+#### 下载与升级
+
+- 便携版：[QuietReader-0.1.10-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-0.1.10-Windows-x64.zip)。
+- SHA-256：`0108966f3231658ef1064f081de3f0926dd83b9b35664daf7792775a4c2bb139`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-0.1.10-Windows-x64.zip.sha256)。
+- 安装升级包：[QuietReader-Setup-0.1.10-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-Setup-0.1.10-x64.exe)。
+- SHA-256：`f775c018ca8b962dfbe260290d4ef7c88c141690ec88840ed42d7a22e574aae9`；[校验文件](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-Setup-0.1.10-x64.exe.sha256)。
+- 从 0.1.9 原目录升级会保留 `data` 中的配置、书籍、书签和阅读进度。便携包不含个人数据，软件包未进行代码签名。
+
+#### 本次修复
+
+- **阅读重排**：重排时从源文本重建正文文档，并重新挂接图片资源、保留文本选区，修复调整专注窗口或排版后正文显示异常的问题。
+- **设置页滚动范围**：按当前打开的设置模块计算页面高度，滚动范围限制在该模块内容内。
+- **排版默认值同步**：首次点击应用默认排版选项时立即同步阅读页和设置控件，避免界面数值与实际排版不一致。
+
+本版本不改变设置或数据格式；升级后继续使用原有 `data`。
+
+### English
+
+QuietReader 0.1.10 is a Windows x64 maintenance release that fixes reader reflow and settings-page interactions.
+
+#### Downloads and upgrade
+
+- Portable package: [QuietReader-0.1.10-Windows-x64.zip](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-0.1.10-Windows-x64.zip).
+- SHA-256: `0108966f3231658ef1064f081de3f0926dd83b9b35664daf7792775a4c2bb139`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-0.1.10-Windows-x64.zip.sha256).
+- Setup and upgrade package: [QuietReader-Setup-0.1.10-x64.exe](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-Setup-0.1.10-x64.exe).
+- SHA-256: `f775c018ca8b962dfbe260290d4ef7c88c141690ec88840ed42d7a22e574aae9`; [checksum file](https://github.com/Nore07/Quiet-Reader/releases/download/v0.1.10/QuietReader-Setup-0.1.10-x64.exe.sha256).
+- An in-place upgrade from 0.1.9 preserves settings, books, bookmarks, and reading progress in `data`. The portable package excludes personal data. The packages are unsigned.
+
+#### Fixes
+
+- **Reader reflow** rebuilds the body document from source text, reattaches image resources, and preserves text selection, fixing display issues after reflow or Focus window resizing.
+- **Settings-page scrolling** sizes the page from the active section and keeps scrolling within that section's content.
+- **Typography defaults** now synchronize the reader page and settings controls on the first click, keeping displayed values in sync with the applied layout.
+
+This release does not change the settings or data format; existing `data` is preserved.
+
+[完整变更 / Full changelog](https://github.com/Nore07/Quiet-Reader/compare/v0.1.9...v0.1.10)
+
 ## [0.1.9] — 2026-11-26
 
 ### 简体中文
