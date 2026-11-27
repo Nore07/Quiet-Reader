@@ -111,6 +111,62 @@ class _SettingsNavButton(QAbstractButton):
 _ColorSwatchChip = ColorSwatchChip
 
 
+class _CurrentPageStack(QStackedWidget):
+    """Use only the visible page's dimensions when sizing the settings scroll area."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(lambda _index: self.updateGeometry())
+
+    def _page_size_hint(self, method_name: str):
+        page = self.currentWidget()
+        if page is None:
+            return None
+
+        size = getattr(page, method_name)()
+        if not size.isValid():
+            return None
+
+        layout = self.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        if margins is not None:
+            size += QSize(
+                margins.left() + margins.right(),
+                margins.top() + margins.bottom(),
+            )
+        frame = self.frameWidth() * 2
+        if frame:
+            size += QSize(frame, frame)
+        return size
+
+    def sizeHint(self):
+        size = self._page_size_hint("sizeHint")
+        return size if size is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        size = self._page_size_hint("minimumSizeHint")
+        return size if size is not None else super().minimumSizeHint()
+
+    def hasHeightForWidth(self):
+        page = self.currentWidget()
+        return page.hasHeightForWidth() if page is not None else super().hasHeightForWidth()
+
+    def heightForWidth(self, width: int) -> int:
+        page = self.currentWidget()
+        if page is None:
+            return super().heightForWidth(width)
+        if not page.hasHeightForWidth():
+            return -1
+
+        layout = self.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        horizontal = margins.left() + margins.right() if margins is not None else 0
+        vertical = margins.top() + margins.bottom() if margins is not None else 0
+        frame = self.frameWidth() * 2
+        height = page.heightForWidth(max(0, width - horizontal - frame))
+        return height + vertical + frame if height >= 0 else height
+
+
 class SettingsPage(QWidget):
     """Two-column in-page settings view with live immediate saving and narrow responsiveness."""
 
@@ -204,7 +260,7 @@ class SettingsPage(QWidget):
         host_layout.setContentsMargins(6, 6, 12, 16)
         host_layout.setSpacing(0)
 
-        self.section_stack = QStackedWidget(self.scroll_host)
+        self.section_stack = _CurrentPageStack(self.scroll_host)
         # Inactive sections must not force the scroll area's content wider than its viewport.
         self.section_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.section_pages: dict[str, QWidget] = {}
