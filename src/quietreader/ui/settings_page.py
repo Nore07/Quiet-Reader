@@ -2,11 +2,11 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QEvent, QRect, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QRect, QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QBoxLayout, QColorDialog, QFontComboBox, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
+    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedLayout,
     QVBoxLayout, QWidget,
 )
 
@@ -111,6 +111,65 @@ class _SettingsNavButton(QAbstractButton):
 _ColorSwatchChip = ColorSwatchChip
 
 
+class _CurrentPageStackLayout(QStackedLayout):
+    """Size the stack from its visible page instead of every hidden page."""
+
+    def _current_size(self, get_size):
+        page = self.currentWidget()
+        if page is None:
+            return None
+
+        size = get_size(page)
+        policy = page.sizePolicy()
+        if policy.horizontalPolicy() == QSizePolicy.Policy.Ignored:
+            size.setWidth(0)
+        if policy.verticalPolicy() == QSizePolicy.Policy.Ignored:
+            size.setHeight(0)
+        return size
+
+    def sizeHint(self):
+        size = self._current_size(lambda page: page.sizeHint())
+        return size if size is not None else super().sizeHint()
+
+    def minimumSize(self):
+        size = self._current_size(
+            lambda page: page.minimumSizeHint().expandedTo(page.minimumSize())
+        )
+        return size if size is not None else super().minimumSize()
+
+    def hasHeightForWidth(self):
+        page = self.currentWidget()
+        return page.hasHeightForWidth() if page is not None else super().hasHeightForWidth()
+
+    def heightForWidth(self, width: int) -> int:
+        page = self.currentWidget()
+        if page is None:
+            return super().heightForWidth(width)
+        return page.heightForWidth(width) if page.hasHeightForWidth() else -1
+
+
+class _CurrentPageStack(QWidget):
+    """Stack settings pages while exposing only the active page's size."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stack = _CurrentPageStackLayout(self)
+        self._stack.currentChanged.connect(self._current_page_changed)
+
+    def addWidget(self, widget: QWidget) -> int:
+        return self._stack.addWidget(widget)
+
+    def currentWidget(self) -> QWidget | None:
+        return self._stack.currentWidget()
+
+    def setCurrentWidget(self, widget: QWidget):
+        self._stack.setCurrentWidget(widget)
+
+    def _current_page_changed(self, _index: int):
+        self._stack.invalidate()
+        self.updateGeometry()
+
+
 class SettingsPage(QWidget):
     """Two-column in-page settings view with live immediate saving and narrow responsiveness."""
 
@@ -204,7 +263,7 @@ class SettingsPage(QWidget):
         host_layout.setContentsMargins(6, 6, 12, 16)
         host_layout.setSpacing(0)
 
-        self.section_stack = QStackedWidget(self.scroll_host)
+        self.section_stack = _CurrentPageStack(self.scroll_host)
         # Inactive sections must not force the scroll area's content wider than its viewport.
         self.section_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.section_pages: dict[str, QWidget] = {}
@@ -770,6 +829,21 @@ class SettingsPage(QWidget):
     def current_section(self) -> str:
         return self._active_section
 
+    def sync_reading_controls(self, settings: Settings, fields=None):
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._settings = replace(settings)
+            if fields is None or "font_family" in fields:
+                self.font_combo.setCurrentFont(QFont(settings.font_family))
+            for key, ctrl in self.typo_sliders.items():
+                if fields is not None and key not in fields:
+                    continue
+                ctrl.set_value(getattr(settings, key))
+                ctrl.retranslate(settings.language)
+        finally:
+            self._syncing = was_syncing
+
     def sync_settings(self, settings: Settings, palette: dict[str, str]):
         self._syncing = True
         self._settings = replace(settings)
@@ -782,10 +856,7 @@ class SettingsPage(QWidget):
             card.apply_card_style(palette["accent"])
 
         self.language_control.set_current(settings.language, emit=False)
-        self.font_combo.setCurrentFont(QFont(settings.font_family))
-        for key, ctrl in self.typo_sliders.items():
-            ctrl.set_value(getattr(settings, key))
-            ctrl.retranslate(settings.language)
+        self.sync_reading_controls(settings)
 
         self._refresh_color_swatches()
         pct = round(max(0.0, min(1.0, settings.opacity)) * 100)
