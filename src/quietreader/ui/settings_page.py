@@ -2,11 +2,11 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QEvent, QRect, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QRect, QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QBoxLayout, QColorDialog, QFontComboBox, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
+    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedLayout,
     QVBoxLayout, QWidget,
 )
 
@@ -111,41 +111,31 @@ class _SettingsNavButton(QAbstractButton):
 _ColorSwatchChip = ColorSwatchChip
 
 
-class _CurrentPageStack(QStackedWidget):
-    """Use only the visible page's dimensions when sizing the settings scroll area."""
+class _CurrentPageStackLayout(QStackedLayout):
+    """Size the stack from its visible page instead of every hidden page."""
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.currentChanged.connect(lambda _index: self.updateGeometry())
-
-    def _page_size_hint(self, method_name: str):
+    def _current_size(self, get_size):
         page = self.currentWidget()
         if page is None:
             return None
 
-        size = getattr(page, method_name)()
-        if not size.isValid():
-            return None
-
-        layout = self.layout()
-        margins = layout.contentsMargins() if layout is not None else None
-        if margins is not None:
-            size += QSize(
-                margins.left() + margins.right(),
-                margins.top() + margins.bottom(),
-            )
-        frame = self.frameWidth() * 2
-        if frame:
-            size += QSize(frame, frame)
+        size = get_size(page)
+        policy = page.sizePolicy()
+        if policy.horizontalPolicy() == QSizePolicy.Policy.Ignored:
+            size.setWidth(0)
+        if policy.verticalPolicy() == QSizePolicy.Policy.Ignored:
+            size.setHeight(0)
         return size
 
     def sizeHint(self):
-        size = self._page_size_hint("sizeHint")
+        size = self._current_size(lambda page: page.sizeHint())
         return size if size is not None else super().sizeHint()
 
-    def minimumSizeHint(self):
-        size = self._page_size_hint("minimumSizeHint")
-        return size if size is not None else super().minimumSizeHint()
+    def minimumSize(self):
+        size = self._current_size(
+            lambda page: page.minimumSizeHint().expandedTo(page.minimumSize())
+        )
+        return size if size is not None else super().minimumSize()
 
     def hasHeightForWidth(self):
         page = self.currentWidget()
@@ -155,16 +145,29 @@ class _CurrentPageStack(QStackedWidget):
         page = self.currentWidget()
         if page is None:
             return super().heightForWidth(width)
-        if not page.hasHeightForWidth():
-            return -1
+        return page.heightForWidth(width) if page.hasHeightForWidth() else -1
 
-        layout = self.layout()
-        margins = layout.contentsMargins() if layout is not None else None
-        horizontal = margins.left() + margins.right() if margins is not None else 0
-        vertical = margins.top() + margins.bottom() if margins is not None else 0
-        frame = self.frameWidth() * 2
-        height = page.heightForWidth(max(0, width - horizontal - frame))
-        return height + vertical + frame if height >= 0 else height
+
+class _CurrentPageStack(QWidget):
+    """Stack settings pages while exposing only the active page's size."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stack = _CurrentPageStackLayout(self)
+        self._stack.currentChanged.connect(self._current_page_changed)
+
+    def addWidget(self, widget: QWidget) -> int:
+        return self._stack.addWidget(widget)
+
+    def currentWidget(self) -> QWidget | None:
+        return self._stack.currentWidget()
+
+    def setCurrentWidget(self, widget: QWidget):
+        self._stack.setCurrentWidget(widget)
+
+    def _current_page_changed(self, _index: int):
+        self._stack.invalidate()
+        self.updateGeometry()
 
 
 class SettingsPage(QWidget):
