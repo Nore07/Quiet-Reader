@@ -107,6 +107,7 @@ class PageView(QWidget):
         self.text = ""
         self._offset_map = _TextOffsetMap("")
         self.images = {}
+        self._image_resources = {}
         self.image_sizes = {}
         self.links = []
         self.formats = []
@@ -139,7 +140,7 @@ class PageView(QWidget):
         self._wheel_page_accumulator = WheelPageAccumulator(self._emit_wheel_turn, self)
 
     @staticmethod
-    def _decode_section_images(document: QTextDocument, images, parent=None):
+    def _decode_section_images(document: QTextDocument, images, parent=None, resource_cache=None):
         loaded = {}
         for position, payload in (images or {}).items():
             data = QBuffer(parent)
@@ -161,6 +162,8 @@ class PageView(QWidget):
             name = QUrl(f"quietreader-image:{position}")
             document.addResource(QTextDocument.ResourceType.ImageResource, name, image)
             loaded[position] = (name, image.size())
+            if resource_cache is not None:
+                resource_cache[position] = image
         return loaded
 
     def set_text(self, text: str, offset=0, images=None, links=None, formats=None):
@@ -181,10 +184,34 @@ class PageView(QWidget):
         self.search_matches = []
         self._search_match_starts = []
         self.active_search_match = None
-        self.images = self._decode_section_images(self.document, images, self)
+        self._image_resources = {}
+        self.images = self._decode_section_images(
+            self.document, images, self, self._image_resources,
+        )
         self.selection = QTextCursor(self.document)
         self._rebuild_term_spans()
         self.reflow(anchor_offset=self.offset)
+
+    def _reset_document_for_reflow(self):
+        """Start each layout pass from source text, not the previously formatted document."""
+        previous = self.document
+        selection_anchor = self._offset_map.to_python(self.selection.anchor())
+        selection_position = self._offset_map.to_python(self.selection.position())
+
+        document = QTextDocument(self)
+        document.setPlainText(self.text)
+        for position, image in self._image_resources.items():
+            name, _size = self.images[position]
+            document.addResource(QTextDocument.ResourceType.ImageResource, name, image)
+
+        self.document = document
+        self.selection = QTextCursor(document)
+        self.selection.setPosition(self._offset_map.to_qt(selection_anchor))
+        self.selection.setPosition(
+            self._offset_map.to_qt(selection_position),
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        previous.deleteLater()
 
     def set_term_notes(self, records):
         """Compile a single longest-first regex and precompute section term spans."""
@@ -586,6 +613,7 @@ class PageView(QWidget):
                 anchor_offset = self.offset
         anchor_offset = max(0, min(len(self.text), int(anchor_offset)))
         self._pending_reflow_anchor = None
+        self._reset_document_for_reflow()
         padding = self.settings.padding
         width = max(80, self.width() - padding * 2)
         self.page_height = max(60, self.height() - padding * 2)
